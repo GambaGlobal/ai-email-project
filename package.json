@@ -2,6 +2,10 @@
   "name": "ai-email-project",
   "private": true,
   "scripts": {
-    "repo:check": "node -e \"console.log('OK')\""
+    "repo:check": "node -e \"console.log('OK')\"",
+    "dev:infra": "docker compose up -d",
+    "dev:infra:down": "docker compose down",
+    "dev:infra:logs": "docker compose logs -f --tail=200",
+    "dev:infra:reset": "docker compose down -v"
   }
 }
