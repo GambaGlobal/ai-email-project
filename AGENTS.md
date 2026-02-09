@@ -18,3 +18,4 @@
 
 ## Change Control
 - No stack changes without a Decision Record amendment.
+- Canonical stack is in `docs/decisions/0001-tech-stack.md` and must be followed.
