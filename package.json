@@ -1,0 +1,7 @@
+{
+  "name": "ai-email-project",
+  "private": true,
+  "scripts": {
+    "repo:check": "node -e \"console.log('OK')\""
+  }
+}
