@@ -24,6 +24,7 @@
 ## Governance Artifacts
 - Decisions live in `docs/decisions/`.
 - Step ledger lives in `docs/step-ledger.md`.
+- For a step’s implementing commit, use `SELF` in the ledger Commit/PR column.
 
 ## Repo Commands (if available)
 - Install: `pnpm install`
