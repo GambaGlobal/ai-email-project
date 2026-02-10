@@ -44,4 +44,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 7.7 | 2026-02-10 | SELF | Phase 7: unknown rules + evaluation plan (grounding metrics + evidence gate). |  |
 | 7.1 | 2026-02-10 | SELF | Phase 7 closeout: DR-0005 + evidence gate + Phase 8 milestones/backlog. |  |
 | 8.1 | 2026-02-10 | SELF | Added Phase 8 guardrails Decision Record (matrix + forbidden list). |  |
-| 8.1.1 | 2026-02-10 | SELF | Renumbered Phase 2 architecture lock DR to resolve duplicate DR-0003. |  |
+| 8.1.1 | 2026-02-10 | SELF | Renumbered Phase 2 architecture lock DR to resolve duplicate 0003 numbering. |  |
