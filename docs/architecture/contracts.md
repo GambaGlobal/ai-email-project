@@ -202,6 +202,31 @@ Outcome table:
 - `draft` -> `upsert_draft` intent with `Ready`, reply target, and idempotency keys.
 - `blocked_user_edited` -> stop updates and route `Needs review`.
 
+## B.7) Failure, retry, and resync contract (v1)
+Failure taxonomy and visibility:
+- System/provider failures default to `Error` label state.
+- Human/content conflicts default to `Needs review`.
+- `draft_conflict_user_edited` must always map to `Needs review` and no retry.
+
+Retry policy (conceptual):
+- `backoff` for `rate_limited`, `provider_unavailable`, `provider_timeout`, and `unknown`.
+- `immediate` for `invalid_cursor` and `needs_full_sync` to enter resync flow quickly.
+- `manual` for `auth_revoked` and `permission_denied`.
+- `none` for `message_not_found`, `thread_not_found`, `draft_conflict_user_edited`, `bad_request`.
+
+Resync behavior:
+- `needsFullSync=true` or `invalid_cursor` triggers bounded backfill in v1.
+- Default bounded backfill window is 7 days.
+- Cursor must not advance until resync plan completes safely.
+- Runtime should record resync attempts/outcomes for auditing and operations.
+
+Examples:
+- Duplicate notification replay -> safe no-op because idempotency keys dedupe work.
+- Gmail history gap -> `needs_full_sync` -> bounded backfill (7 days) -> `Error` during remediation.
+- Auth revoked -> `auth_revoked` -> `Error` + manual reconnect required.
+- Draft blocked due to user edit -> `draft_conflict_user_edited` -> `Needs review`, no retry.
+- Provider rate limit -> `rate_limited` -> `Error` + backoff retry.
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`

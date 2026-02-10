@@ -7,3 +7,4 @@ export * from "./ingestion";
 export * from "./drafts";
 export * from "./concurrency";
 export * from "./lifecycle";
+export * from "./failures";
