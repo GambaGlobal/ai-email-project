@@ -23,3 +23,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.9 | 2026-02-10 | SELF | Added runtime mail provider registry composition root (gmail wired, outlook placeholder). |  |
 | 2.10 | 2026-02-10 | SELF | Added shared pipeline job + run + audit contract types. |  |
 | 2.11 | 2026-02-10 | SELF | Added shared queue naming + retry defaults + envelope helper. |  |
+| 2.12 | 2026-02-10 | SELF | Phase 2 closeout doc with decisions, evidence gate, milestone map, and next backlog. |  |
