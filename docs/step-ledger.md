@@ -22,3 +22,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.8.1 | 2026-02-10 | SELF | Added mail-gmail README with construction examples. |  |
 | 2.9 | 2026-02-10 | SELF | Added runtime mail provider registry composition root (gmail wired, outlook placeholder). |  |
 | 2.10 | 2026-02-10 | SELF | Added shared pipeline job + run + audit contract types. |  |
+| 2.11 | 2026-02-10 | SELF | Added shared queue naming + retry defaults + envelope helper. |  |
