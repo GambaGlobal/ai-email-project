@@ -49,3 +49,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 8.3 | 2026-02-10 | SELF | Added Phase 8 classification policy spec (rules → AI → policy engine). |  |
 | 8.4 | 2026-02-10 | SELF | Added Phase 8 audit logging + privacy spec (v1). |  |
 | 8.5 | 2026-02-10 | SELF | Added Phase 8 operator review UX spec (Gmail-first). |  |
+| 8.6 | 2026-02-10 | SELF | Added Phase 8 golden dataset + evaluation plan (v1). |  |
