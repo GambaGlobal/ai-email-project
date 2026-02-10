@@ -17,3 +17,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.4 | 2026-02-10 | SELF | Added minimal data model spec for Phase 2. |  |
 | 2.5 | 2026-02-10 | SELF | Added initial Postgres migrations for minimal multi-tenant schema. |  |
 | 2.6 | 2026-02-10 | SELF | Added Postgres RLS tenant isolation policies + verification script. |  |
+| 2.7 | 2026-02-10 | SELF | Added canonical mail models and MailProvider interface in shared package. |  |
