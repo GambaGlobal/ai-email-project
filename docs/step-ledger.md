@@ -36,3 +36,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.8 | 2026-02-10 | SELF | Define failure taxonomy + retry/resync contract helpers. |  |
 | 6.9 | 2026-02-10 | SELF | Define telemetry event schema + Phase 6 evidence metrics. |  |
 | 6.10 | 2026-02-10 | SELF | Phase 6 closeout: DR + evidence gate + Phase 7 milestone/backlog. |  |
+| 7.2 | 2026-02-10 | SELF | Phase 7: knowledge taxonomy + doc priority + metadata/staleness spec. |  |
