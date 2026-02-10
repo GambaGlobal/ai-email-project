@@ -14,3 +14,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.1 | 2026-02-10 | SELF | Added/updated DR-0001 tech stack and added DR-0003 Phase 2 architecture lock. |  |
 | 2.2 | 2026-02-10 | SELF | Added architecture overview doc defining boundaries and event pipeline. |  |
 | 2.3 | 2026-02-10 | SELF | Defined canonical contracts for MailProvider, event pipeline, AI boundary, and auditability. |  |
+| 2.4 | 2026-02-10 | SELF | Added minimal data model spec for Phase 2. |  |

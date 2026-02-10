@@ -1,4 +1,5 @@
 # Canonical Contracts (Phase 2)
+See `docs/architecture/data-model.md` for the minimal data model spec.
 
 ## A) Contract principles (1 short section)
 - Provider-agnostic core, provider-specific adapters.
