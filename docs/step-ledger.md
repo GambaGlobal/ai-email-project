@@ -29,3 +29,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.2.1 | 2026-02-10 | SELF | Patch Copilot label set to include Ready and align state mapping. |  |
 | 6.3 | 2026-02-10 | SELF | Define v1 eligibility + sensitive triage rules as shared pure helpers. |  |
 | 6.3.1 | 2026-02-10 | SELF | Fix triage reason taxonomy for user-draft presence (needs_review reason). |  |
+| 6.4 | 2026-02-10 | SELF | Define cursor-based ingestion contract + canonical system label normalization rule. |  |

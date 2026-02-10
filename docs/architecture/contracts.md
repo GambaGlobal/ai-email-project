@@ -93,6 +93,30 @@ Examples:
 - Thread is not in INBOX (archived/out of inbox) -> `ignore` (`not_in_inbox`)
 - Simple guest question in INBOX with single recipient -> `draft` (`Ready`)
 
+## B.3) Change ingestion contract (cursor-based)
+Canonical label normalization rule:
+- Providers MUST normalize system mailbox state labels to canonical values: `INBOX`, `SPAM`, `TRASH`.
+- Normalization is case-insensitive and must be available at message/thread level.
+- This rule applies even if a provider uses folders or provider-specific IDs (for example, Outlook categories/folders).
+- Shared triage rules depend on these canonical labels.
+
+Ingestion algorithm (provider-agnostic, idempotent):
+1. Input: `mailboxId` and current mailbox cursor (`Cursor`).
+2. Trigger on push notifications and on scheduled backstop polling.
+3. Load current cursor for mailbox.
+4. Call `provider.listChanges(cursor)`.
+5. If `needsFullSync` is true, use bounded resync strategy (defined in later step) before advancing cursor.
+6. Derive deduped work items (`messageIds`, `threadIds`) from changes.
+7. Enqueue work items with idempotency keys (queue wiring in later step).
+8. Persist `nextCursor` only after plan enqueue/processing succeeds.
+
+Replay and idempotency semantics:
+- Notifications are at-least-once and change windows may overlap.
+- Process each `(mailboxId, messageId)` at most once (enforced later with storage constraints).
+- Draft slot identity is `(mailboxId, threadId, draftKind)`.
+- Cursor updates are monotonic and written only after safe completion.
+- Provider examples: Gmail cursor is `historyId`; Outlook cursor is `delta token`.
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`
