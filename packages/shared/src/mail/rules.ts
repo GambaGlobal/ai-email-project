@@ -10,7 +10,6 @@ export type IgnoreReason =
   | "in_spam_or_trash"
   | "latest_is_operator_sent"
   | "auto_reply_or_no_reply"
-  | "thread_has_user_draft"
   | "missing_required_fields";
 
 export type NeedsReviewReason =
@@ -20,6 +19,7 @@ export type NeedsReviewReason =
   | "sensitive_legal"
   | "sensitive_exception_request"
   | "multi_party_thread"
+  | "thread_has_user_draft"
   | "user_edited_draft_detected"
   | "ambiguous_sender"
   | "other";
