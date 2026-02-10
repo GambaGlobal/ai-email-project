@@ -34,3 +34,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.6 | 2026-02-10 | SELF | Define thread-scoped concurrency + ordering + idempotency contract. |  |
 | 6.7 | 2026-02-10 | SELF | Define v1 draft lifecycle state machine planner (shared) + contract doc. |  |
 | 6.8 | 2026-02-10 | SELF | Define failure taxonomy + retry/resync contract helpers. |  |
+| 6.9 | 2026-02-10 | SELF | Define telemetry event schema + Phase 6 evidence metrics. |  |

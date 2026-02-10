@@ -227,6 +227,34 @@ Examples:
 - Draft blocked due to user edit -> `draft_conflict_user_edited` -> `Needs review`, no retry.
 - Provider rate limit -> `rate_limited` -> `Error` + backoff retry.
 
+## B.8) Metrics + instrumentation (v1)
+Canonical telemetry event schema (v1 names):
+- `mail.ingestion.plan_built`: ingestion planner output volumes and `needsFullSync` signal.
+- `mail.thread.fetched`: thread fetch success context (includeBody flag and message count).
+- `mail.triage.decided`: triage action (`draft|needs_review|ignore`) and reason.
+- `mail.draft.upsert_attempted`: upsert intent (`copilot_reply`), existing draft presence, fingerprint expectation.
+- `mail.draft.upsert_result`: provider upsert result (`created|updated|unchanged|blocked_user_edited`) and optional duration.
+- `mail.label.applied`: state label transition (`ready|needs_review|error`) and add/remove counts.
+- `mail.blocked_user_edited`: explicit never-overwrite guard trigger reason.
+- `mail.failure.classified`: failure taxonomy classification (`kind`, `retry`, `labelState`).
+- `mail.resync.decided`: resync mode/reason and optional backfill window.
+
+Evidence metrics for Phase 6 proof points:
+1. Draft creation rate: `% eligible threads with upsert_attempted and Ready label`.
+2. Needs-review rate: `% triaged needs_review`, segmented by triage reason.
+3. Ignore rate: `% triaged ignore`, segmented by ignore reason.
+4. Blocked user edit rate: `% blocked_user_edited over draft upsert attempts`.
+5. Draft update success rate: `% created|updated|unchanged over upsert attempts`.
+6. Failure rate by kind: count and rate from `mail.failure.classified` grouped by failure kind.
+7. Resync frequency: count/rate of `mail.resync.decided` by mode and reason.
+8. End-to-end latency: p50/p95 from `mail.ingestion.plan_built` to `mail.draft.upsert_result` per correlationId.
+9. Duplicate-notification dedupe effectiveness: repeated ingestion plans over same logical cursor range that do not create duplicate work.
+10. Operator adoption proxy (v1): `% Ready-labeled threads with eventual draft send action` (captured in later runtime step).
+
+Privacy constraints (non-negotiable):
+- Telemetry MUST NOT include email body, subject, guest addresses, snippets, or attachment content.
+- Telemetry context is mailbox-scoped and operational only (tenantId, mailboxId, provider, ids, correlation/idempotency keys).
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`

@@ -25,3 +25,5 @@ export type {
   MailJobInput,
   QueueName
 } from "./queue/types";
+
+export * from "./telemetry";
