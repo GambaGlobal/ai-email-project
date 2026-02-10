@@ -6,6 +6,9 @@
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
     "dev:infra:logs": "docker compose logs -f --tail=200",
-    "dev:infra:reset": "docker compose down -v"
+    "dev:infra:reset": "docker compose down -v",
+    "db:migrate": "pnpm --filter @ai-email/db db:migrate",
+    "db:rollback": "pnpm --filter @ai-email/db db:rollback",
+    "db:create": "pnpm --filter @ai-email/db db:create"
   }
 }

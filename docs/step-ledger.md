@@ -9,3 +9,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 1.5 | 2026-02-09 | 837b639 | Add GitHub Actions CI checks for repo safety rails. |  |
 | 1.6.1 | 2026-02-09 | SELF | Standardize ledger commit value for self-implementing steps. |  |
 | 1.7 | 2026-02-09 | SELF | Scaffold core packages (core/mail/telemetry/db). |  |
+| 1.8 | 2026-02-09 | SELF | DB migrations scaffold added. |  |

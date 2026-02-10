@@ -1,5 +1,14 @@
 {
   "name": "@ai-email/db",
   "version": "0.0.0",
-  "private": true
+  "private": true,
+  "scripts": {
+    "db:migrate": "node-pg-migrate -c migrate.config.cjs up",
+    "db:rollback": "node-pg-migrate -c migrate.config.cjs down 1",
+    "db:create": "node-pg-migrate -c migrate.config.cjs create"
+  },
+  "dependencies": {
+    "node-pg-migrate": "^7.9.0",
+    "pg": "^8.11.5"
+  }
 }
