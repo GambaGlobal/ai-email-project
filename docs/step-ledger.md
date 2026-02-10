@@ -24,3 +24,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.10 | 2026-02-10 | SELF | Added shared pipeline job + run + audit contract types. |  |
 | 2.11 | 2026-02-10 | SELF | Added shared queue naming + retry defaults + envelope helper. |  |
 | 2.12 | 2026-02-10 | SELF | Phase 2 closeout doc with decisions, evidence gate, milestone map, and next backlog. |  |
+| 6.1 | 2026-02-10 | SELF | Define provider-agnostic MailProvider Thread+Draft contract (types/interfaces only). |  |

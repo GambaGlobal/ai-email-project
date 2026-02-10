@@ -1,13 +1,15 @@
 import type {
-  CanonicalDraft,
-  CanonicalMessage,
-  CanonicalThread,
-  MailEvent,
+  EnsureLabelRequest,
+  EnsureLabelResponse,
+  GetThreadRequest,
+  GetThreadResponse,
+  ListChangesRequest,
+  ListChangesResponse,
+  ModifyThreadLabelsRequest,
   MailProvider,
   MailProviderContext,
-  MailProviderWatchState,
-  ProviderMessageId,
-  ProviderThreadId
+  UpsertThreadDraftRequest,
+  UpsertThreadDraftResponse
 } from "@ai-email/shared";
 import { NotImplementedError } from "./errors";
 
@@ -18,65 +20,40 @@ const notImplemented = (method: string): never => {
 };
 
 export class GmailProvider implements MailProvider {
-  name: MailProvider["name"] = "gmail";
+  kind: MailProvider["kind"] = "gmail";
 
-  async startWatch(_context: MailProviderContext): Promise<MailProviderWatchState> {
-    return {
-      provider: "gmail",
-      cursor: "stub",
-      startedAt: new Date().toISOString()
-    };
-  }
-
-  async stopWatch(_context: MailProviderContext): Promise<void> {
-    notImplemented("stopWatch");
-  }
-
-  async validateNotification(_payload: unknown): Promise<boolean> {
-    notImplemented("validateNotification");
-  }
-
-  async translateNotification(
-    _payload: unknown,
-    _context: MailProviderContext
-  ): Promise<MailEvent[]> {
-    notImplemented("translateNotification");
-  }
-
-  async listRecent(
+  async listChanges(
     _context: MailProviderContext,
-    _cursor?: string
-  ): Promise<MailEvent[]> {
-    notImplemented("listRecent");
+    _req: ListChangesRequest
+  ): Promise<ListChangesResponse> {
+    notImplemented("listChanges");
   }
 
-  async fetchMessage(
+  async getThread(
     _context: MailProviderContext,
-    _providerMessageId: ProviderMessageId
-  ): Promise<CanonicalMessage> {
-    notImplemented("fetchMessage");
+    _req: GetThreadRequest
+  ): Promise<GetThreadResponse> {
+    notImplemented("getThread");
   }
 
-  async fetchThread(
+  async ensureLabel(
     _context: MailProviderContext,
-    _providerThreadId: ProviderThreadId
-  ): Promise<CanonicalThread & { messages: CanonicalMessage[] }> {
-    notImplemented("fetchThread");
+    _req: EnsureLabelRequest
+  ): Promise<EnsureLabelResponse> {
+    notImplemented("ensureLabel");
   }
 
-  async createDraftInThread(
+  async modifyThreadLabels(
     _context: MailProviderContext,
-    _providerThreadId: ProviderThreadId,
-    _draft: Omit<CanonicalDraft, "providerDraftId">
-  ): Promise<CanonicalDraft> {
-    notImplemented("createDraftInThread");
+    _req: ModifyThreadLabelsRequest
+  ): Promise<void> {
+    notImplemented("modifyThreadLabels");
   }
 
-  async updateDraft(): Promise<CanonicalDraft> {
-    notImplemented("updateDraft");
-  }
-
-  async applyLabel(): Promise<void> {
-    notImplemented("applyLabel");
+  async upsertThreadDraft(
+    _context: MailProviderContext,
+    _req: UpsertThreadDraftRequest
+  ): Promise<UpsertThreadDraftResponse> {
+    notImplemented("upsertThreadDraft");
   }
 }
