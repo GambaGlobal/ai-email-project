@@ -73,6 +73,26 @@ High-level removal rule:
 - Replace prior state label when state changes.
 - Remove copilot state labels when a thread is considered handled/closed in later lifecycle work (detailed rules in Step 6.7).
 
+## B.2) Eligibility & triage rules (v1)
+Decision order (first match wins):
+1. Ignore if thread has no messages or latest sender is missing.
+2. Ignore if latest message is in `SPAM` or `TRASH`.
+3. Ignore if neither thread labels nor latest message labels contain `INBOX`.
+4. Route to `needs_review` if a user-edited draft is present.
+5. Ignore if latest sender matches a known operator email.
+6. Route to `needs_review` as `ambiguous_sender` when operator identity is unavailable.
+7. Ignore for no-reply or auto-reply messages.
+8. Route to `needs_review` for sensitive refund/cancellation, medical, safety, legal, or exception keywords.
+9. Route to `needs_review` for multi-party threads (`to > 1`, or any `cc`/`bcc`).
+10. Otherwise mark as draftable (`draft` -> `Ready`).
+
+Examples:
+- Guest asks "Can I get a refund?" -> `needs_review` (`sensitive_refund_or_cancellation`)
+- Guest says "We have asthma, is this safe?" -> `needs_review` (`sensitive_medical`)
+- Operator is the latest sender in thread -> `ignore` (`latest_is_operator_sent`)
+- Thread is not in INBOX (archived/out of inbox) -> `ignore` (`not_in_inbox`)
+- Simple guest question in INBOX with single recipient -> `draft` (`Ready`)
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`

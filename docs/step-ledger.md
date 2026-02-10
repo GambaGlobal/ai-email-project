@@ -27,3 +27,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.1 | 2026-02-10 | SELF | Define provider-agnostic MailProvider Thread+Draft contract (types/interfaces only). |  |
 | 6.2 | 2026-02-10 | SELF | Define Copilot label namespace + thread state mapping constants. |  |
 | 6.2.1 | 2026-02-10 | SELF | Patch Copilot label set to include Ready and align state mapping. |  |
+| 6.3 | 2026-02-10 | SELF | Define v1 eligibility + sensitive triage rules as shared pure helpers. |  |
