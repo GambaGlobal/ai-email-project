@@ -144,6 +144,33 @@ Upsert safety rule:
 Draft key identity:
 - `draftKey` is a stable thread-scoped identity (for example `mailboxId + threadId + draftKind`), not guest PII.
 
+## B.5) Concurrency, ordering, and idempotency (thread-safe processing)
+At-least-once and idempotency:
+- Change notifications may replay; all processing paths must be idempotent.
+- Message work idempotency unit: `(mailboxId, messageId)`.
+- Draft slot idempotency unit: `(mailboxId, threadId, kind="copilot_reply")`.
+- Cursor idempotency unit: `(mailboxId, cursor)`; advance only after safe completion.
+
+Thread-scoped single-flight:
+- At most one active thread processor per `(mailboxId, threadId)`.
+- Draft upserts for a thread are serialized behind this thread key.
+- If duplicate thread work arrives while active, runtime may no-op or reschedule.
+
+Ordering rule:
+- Always decide draft action from the latest inbound message in the thread.
+- Stale work (older message than known latest) must no-op and must not write/update drafts.
+- Ties must resolve deterministically with a stable tie-breaker.
+
+Interaction with never-overwrite invariant:
+- Before any update, verify ownership markers and fingerprint match.
+- If ownership fails or fingerprint mismatches, return `blocked_user_edited`.
+- Route blocked updates to `Needs review` and stop draft mutation.
+
+Failure and retry safety:
+- Retries are expected and must remain safe under replay.
+- Idempotency keys and single-flight expectations prevent duplicate side effects.
+- Lock TTLs and heartbeats are runtime concerns; contract requires safe re-entry.
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`

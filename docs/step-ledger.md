@@ -31,3 +31,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.3.1 | 2026-02-10 | SELF | Fix triage reason taxonomy for user-draft presence (needs_review reason). |  |
 | 6.4 | 2026-02-10 | SELF | Define cursor-based ingestion contract + canonical system label normalization rule. |  |
 | 6.5 | 2026-02-10 | SELF | Define Copilot draft marker + fingerprint helpers to prevent overwriting human edits. |  |
+| 6.6 | 2026-02-10 | SELF | Define thread-scoped concurrency + ordering + idempotency contract. |  |
