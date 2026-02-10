@@ -38,3 +38,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.10 | 2026-02-10 | SELF | Phase 6 closeout: DR + evidence gate + Phase 7 milestone/backlog. |  |
 | 7.2 | 2026-02-10 | SELF | Phase 7: knowledge taxonomy + doc priority + metadata/staleness spec. |  |
 | 7.3 | 2026-02-10 | SELF | Phase 7: ingestion pipeline spec (upload→parse→chunk→embed→index) + idempotency/failure states. |  |
+| 7.4 | 2026-02-10 | SELF | Phase 7: chunking + operator-visible citation scheme spec. |  |
