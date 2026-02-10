@@ -117,6 +117,33 @@ Replay and idempotency semantics:
 - Cursor updates are monotonic and written only after safe completion.
 - Provider examples: Gmail cursor is `historyId`; Outlook cursor is `delta token`.
 
+## B.4) Copilot draft ownership + fingerprinting (never overwrite)
+Marker headers (required when provider supports custom draft headers):
+- `X-Inbox-Copilot-Draft-Key`
+- `X-Inbox-Copilot-Marker-Version`
+
+Body marker fallback (defensive when providers strip headers):
+- HTML comment format: `<!-- inbox-copilot:draftKey=<draftKey>;v=1 -->`
+- Keep marker single-line and stable.
+
+Fingerprinting algorithm (high-level):
+- Compute `sha256` over a canonical string containing:
+  - draft marker key and marker version
+  - subject (or empty)
+  - plain text body
+  - HTML body (or empty)
+- Normalize line endings and trim/collapse trailing whitespace-only lines before hashing.
+- Output format: `sha256:<hex>`.
+
+Upsert safety rule:
+- Provider reads current draft, determines ownership from headers first and body marker fallback second.
+- Provider computes `currentFingerprint` from current draft content.
+- If marker is missing/invalid OR `expectedPreviousFingerprint` mismatches `currentFingerprint`, return `blocked_user_edited`.
+- On `blocked_user_edited`, route thread state to `Needs review` for explicit operator handling.
+
+Draft key identity:
+- `draftKey` is a stable thread-scoped identity (for example `mailboxId + threadId + draftKind`), not guest PII.
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`
