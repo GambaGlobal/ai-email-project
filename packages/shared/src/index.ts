@@ -25,3 +25,17 @@ export type {
   MailProviderFactory,
   MailProviderRegistry
 } from "./mail/registry";
+
+export type {
+  AuditEvent,
+  AuditStage,
+  CorrelationId,
+  ErrorCategory,
+  MailJobEnvelope,
+  MailJobType,
+  PipelineError,
+  RunAttempt,
+  RunContext,
+  RunId,
+  RunKey
+} from "./pipeline/types";
