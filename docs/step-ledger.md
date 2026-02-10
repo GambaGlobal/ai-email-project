@@ -42,3 +42,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 7.5 | 2026-02-10 | SELF | Phase 7: retrieval & ranking spec (hybrid search, precedence, staleness, evidence packs). |  |
 | 7.6 | 2026-02-10 | SELF | Phase 7: conflict + staleness handling spec (deterministic escalation + reason codes). |  |
 | 7.7 | 2026-02-10 | SELF | Phase 7: unknown rules + evaluation plan (grounding metrics + evidence gate). |  |
+| 7.1 | 2026-02-10 | SELF | Phase 7 closeout: DR-0005 + evidence gate + Phase 8 milestones/backlog. |  |
