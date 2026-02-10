@@ -47,3 +47,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 8.1.1 | 2026-02-10 | SELF | Renumbered Phase 2 architecture lock DR to resolve duplicate 0003 numbering. |  |
 | 8.2 | 2026-02-10 | SELF | Added Phase 8 guardrail taxonomy examples bank (v1). |  |
 | 8.3 | 2026-02-10 | SELF | Added Phase 8 classification policy spec (rules → AI → policy engine). |  |
+| 8.5 | 2026-02-10 | SELF | Added Phase 8 operator review UX spec (Gmail-first). |  |
