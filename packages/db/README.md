@@ -2,4 +2,4 @@
 
 Purpose: Database client entrypoint and migrations home.
 
-Not: Schema or migrations yet (scaffolding only).
+Migrations live in `packages/db/migrations` and are applied via `pnpm --filter @ai-email/db db:migrate`.
