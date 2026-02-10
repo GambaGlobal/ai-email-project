@@ -35,3 +35,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 6.7 | 2026-02-10 | SELF | Define v1 draft lifecycle state machine planner (shared) + contract doc. |  |
 | 6.8 | 2026-02-10 | SELF | Define failure taxonomy + retry/resync contract helpers. |  |
 | 6.9 | 2026-02-10 | SELF | Define telemetry event schema + Phase 6 evidence metrics. |  |
+| 6.10 | 2026-02-10 | SELF | Phase 6 closeout: DR + evidence gate + Phase 7 milestone/backlog. |  |
