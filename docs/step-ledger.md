@@ -12,3 +12,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 1.8 | 2026-02-09 | SELF | DB migrations scaffold added. |  |
 | 1.9 | 2026-02-10 | SELF | API and worker smoke boot with healthz. |  |
 | 2.1 | 2026-02-10 | SELF | Added/updated DR-0001 tech stack and added DR-0003 Phase 2 architecture lock. |  |
+| 2.2 | 2026-02-10 | SELF | Added architecture overview doc defining boundaries and event pipeline. |  |
