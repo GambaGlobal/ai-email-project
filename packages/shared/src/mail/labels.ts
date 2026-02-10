@@ -8,9 +8,9 @@ export type CopilotThreadState = "ready" | "needs_review" | "error";
 export const COPILOT_LABEL_NAMESPACE = "Inbox Copilot" as const;
 
 export const COPILOT_LABELS = {
-  ready: "Inbox Copilot/Ready",
-  needsReview: "Inbox Copilot/Needs review",
-  error: "Inbox Copilot/Error"
+  ready: `${COPILOT_LABEL_NAMESPACE}/Ready`,
+  needsReview: `${COPILOT_LABEL_NAMESPACE}/Needs review`,
+  error: `${COPILOT_LABEL_NAMESPACE}/Error`
 } as const;
 
 export type CopilotLabelName = typeof COPILOT_LABELS[keyof typeof COPILOT_LABELS];

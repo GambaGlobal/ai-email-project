@@ -26,3 +26,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.12 | 2026-02-10 | SELF | Phase 2 closeout doc with decisions, evidence gate, milestone map, and next backlog. |  |
 | 6.1 | 2026-02-10 | SELF | Define provider-agnostic MailProvider Thread+Draft contract (types/interfaces only). |  |
 | 6.2 | 2026-02-10 | SELF | Define Copilot label namespace + thread state mapping constants. |  |
+| 6.2.1 | 2026-02-10 | SELF | Patch Copilot label set to include Ready and align state mapping. |  |

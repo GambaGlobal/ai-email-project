@@ -65,7 +65,7 @@ Semantics:
 - Shared code defines canonical state keys: `ready`, `needs_review`, `error`.
 
 When to apply:
-- `Ready`: a draft was created/updated successfully and is safe for operator review/send.
+- `Ready`: a draft was created/updated successfully and is safe for operator review/sending.
 - `Needs review`: sensitive content, user-edited draft protection triggered, or ambiguity requiring human decision.
 - `Error`: repeated processing failure, auth revoked, or unrecoverable provider/processing error.
 
