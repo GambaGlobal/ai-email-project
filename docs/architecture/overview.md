@@ -2,6 +2,7 @@
 
 ## A) Purpose / What this doc is for
 This document defines system boundaries and the end-to-end event pipeline for Gmail-first drafts, and how Outlook plugs in later via MailProvider without rewrites. It is the execution reference for Phase 2 implementation steps and must stay aligned with DR-0003.
+See `docs/architecture/contracts.md` for canonical contract details.
 
 ## B) System boundary diagram (Mermaid)
 ```mermaid

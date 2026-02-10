@@ -1,0 +1,124 @@
+# Canonical Contracts (Phase 2)
+
+## A) Contract principles (1 short section)
+- Provider-agnostic core, provider-specific adapters.
+- Idempotent by default.
+- Guardrails-first.
+- Evidence-gated drafting (no guessing).
+- Multi-tenant isolation everywhere.
+
+## B) MailProvider contract (conceptual)
+Purpose: isolate provider-specific integrations (Gmail now, Outlook later) behind a single interface.
+
+Canonical identifiers:
+- `provider` (gmail | outlook)
+- `provider_mailbox_id`
+- `provider_thread_id`
+- `provider_message_id`
+- `provider_draft_id`
+
+Required capabilities (inputs/outputs, conceptual):
+- Auth lifecycle: connect, refresh, and detect revoke; emit mailbox health state.
+- Notification lifecycle:
+  - `subscribe` / `startWatch`
+  - `validateNotification`
+  - `translateNotification` -> canonical MailEvent(s)
+  - `resync` / `listRecent` for gap recovery
+- Data access:
+  - `fetchMessage` (normalized message)
+  - `fetchThread` (normalized thread, ordered)
+- Draft operations:
+  - `createDraftInThread`
+  - `updateDraft` (optional)
+  - `applyLabel` or tag intent (provider-specific mapping)
+
+Normalized message shape (conceptual fields):
+- `from`, `to`, `cc`, `bcc`
+- `subject`
+- `date`
+- `text_body`
+- `html_body` (optional)
+- `attachments` metadata (filename, mime, size, provider_attachment_id)
+- `snippet`
+
+Normalized thread shape (conceptual fields):
+- `provider_thread_id`
+- `subject`
+- ordered `messages[]` (ascending by message date, stable ordering by provider message id as tie-breaker)
+
+Outlook compatibility notes:
+- Graph subscriptions map to `subscribe` and `translateNotification`.
+- Graph message and thread IDs map to the canonical identifiers above.
+
+## C) Event pipeline contract (internal)
+Canonical event types:
+- `mail.message.received`
+- `mail.thread.updated` (optional for v1)
+- `mail.processing.started`
+- `mail.processing.completed`
+- `mail.processing.failed`
+- `mail.draft.created`
+- `mail.flagged.sensitive`
+
+Event envelope requirements:
+- `tenant_id`, `mailbox_id`, `provider`, `correlation_id`
+- `occurred_at`, `received_at`
+- provider cursor fields (`gmail_history_id` or `outlook_change_key`/event id)
+
+Idempotency and dedupe:
+- Event dedupe key stored on ingest: `(tenant_id, mailbox_id, provider_message_id, event_type)`.
+- Job idempotency: job id derived from `(tenant_id, mailbox_id, provider_message_id)`.
+- Draft idempotency: one draft per `(tenant_id, mailbox_id, provider_message_id)` by default.
+
+Retry semantics:
+- Transient errors: retry with exponential backoff and bounded attempts.
+- Permanent errors: mark failed with error category and stop retries.
+- Operator attention required when auth revoked, repeated rate-limit failures, or repeated provider gaps.
+
+## D) AI boundary contract (guardrails + retrieval + draft)
+Inputs:
+- Normalized inbound message.
+- Thread context selection rules (conceptual): include recent messages, exclude signatures/quoted blocks when possible.
+- Tenant voice/settings.
+- Retrieved evidence snippets (doc chunk refs + excerpts).
+- Allowed action: `draft` vs `review-required`.
+
+Outputs:
+- Draft body (plain text; optional HTML notes).
+- Optional claims list for audit (statement -> evidence refs).
+- Uncertainty or missing-info questions.
+- Confidence signal (conceptual).
+
+Guardrails enforcement (outside the model):
+- Sensitive classifier runs before drafting.
+- Evidence gating thresholds applied before draft creation.
+- Forbidden behaviors: invent policies, promise refunds, provide medical/legal advice, or override operator policies.
+
+## E) Observability / audit contract
+Required correlation IDs:
+- `tenant_id`, `mailbox_id`, `provider_thread_id`, `provider_message_id`, `job_id`, `run_id`.
+
+Audit event requirements:
+- Append-only.
+- Includes stage, timestamps, outcome, error category, evidence ids, model/version.
+
+Minimum audit events per run:
+- notification received
+- job enqueued
+- processing started
+- retrieval complete
+- AI complete
+- draft created OR sensitive flagged
+- processing completed or failed
+
+Metrics (conceptual list):
+- time-to-draft
+- draft rate
+- sensitive rate
+- retry rate
+- provider error rate
+- operator actions (send/edit/discard)
+
+## F) Security & tenancy notes (short)
+- Tenant scoping: every read/write is filtered by `tenant_id` with mailbox ownership enforced.
+- Data retention: configurable retention window; store only minimal required message data and evidence artifacts.
