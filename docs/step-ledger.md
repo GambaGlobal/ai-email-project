@@ -11,7 +11,7 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 1.7 | 2026-02-09 | SELF | Scaffold core packages (core/mail/telemetry/db). |  |
 | 1.8 | 2026-02-09 | SELF | DB migrations scaffold added. |  |
 | 1.9 | 2026-02-10 | SELF | API and worker smoke boot with healthz. |  |
-| 2.1 | 2026-02-10 | SELF | Added/updated DR-0001 tech stack and added DR-0003 Phase 2 architecture lock. |  |
+| 2.1 | 2026-02-10 | SELF | Added/updated DR-0001 tech stack and added DR-0007 Phase 2 architecture lock. |  |
 | 2.2 | 2026-02-10 | SELF | Added architecture overview doc defining boundaries and event pipeline. |  |
 | 2.3 | 2026-02-10 | SELF | Defined canonical contracts for MailProvider, event pipeline, AI boundary, and auditability. |  |
 | 2.4 | 2026-02-10 | SELF | Added minimal data model spec for Phase 2. |  |
@@ -44,3 +44,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 7.7 | 2026-02-10 | SELF | Phase 7: unknown rules + evaluation plan (grounding metrics + evidence gate). |  |
 | 7.1 | 2026-02-10 | SELF | Phase 7 closeout: DR-0005 + evidence gate + Phase 8 milestones/backlog. |  |
 | 8.1 | 2026-02-10 | SELF | Added Phase 8 guardrails Decision Record (matrix + forbidden list). |  |
+| 8.1.1 | 2026-02-10 | SELF | Renumbered Phase 2 architecture lock DR to resolve duplicate DR-0003. |  |

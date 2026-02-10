@@ -1,7 +1,7 @@
 # Data Model (Phase 2)
 
 ## A) Purpose
-Define the minimal canonical data model needed to support the Phase 2 pipeline in DR-0003 and the contracts in `docs/architecture/contracts.md` before writing migrations. This is a conceptual spec for entities, constraints, and retention, not an implementation.
+Define the minimal canonical data model needed to support the Phase 2 pipeline in DR-0007 and the contracts in `docs/architecture/contracts.md` before writing migrations. This is a conceptual spec for entities, constraints, and retention, not an implementation.
 
 ## B) Tenancy + scoping rules (must be explicit)
 - Every row is tenant-scoped (`tenant_id`) unless explicitly global.

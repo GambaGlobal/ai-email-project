@@ -18,12 +18,12 @@ Lock system boundaries so we do not rewrite later when adding Outlook or scaling
 ## C) Decision Record (frozen choices)
 Frozen choices (summary):
 - Stack lock per DR-0001: TypeScript monorepo, Next.js admin, Fastify API, Node worker, Postgres + pgvector, BullMQ + Redis, S3, Gmail + Pub/Sub, OpenAI Responses wrapper.
-- Architecture lock per DR-0003: event-driven pipeline, MailProvider boundary, idempotency, guardrails-first, auditability, multi-tenant enforcement.
+- Architecture lock per DR-0007: event-driven pipeline, MailProvider boundary, idempotency, guardrails-first, auditability, multi-tenant enforcement.
 - API framework per DR-0002: Fastify.
 
 References:
 - `docs/decisions/0001-tech-stack.md`
-- `docs/decisions/0003-phase-2-architecture-lock.md`
+- `docs/decisions/0007-phase-2-architecture-lock.md`
 - `docs/decisions/0002-api-framework.md`
 
 Amendment rule: any change to these frozen choices requires a new Decision Record amendment in `docs/decisions/`.
