@@ -51,6 +51,28 @@ Outlook compatibility notes:
 - Graph subscriptions map to `subscribe` and `translateNotification`.
 - Graph message and thread IDs map to the canonical identifiers above.
 
+## B.1) Gmail-visible state via labels
+Namespace and thread labels (v1):
+- Parent namespace: `Inbox Copilot`
+- State labels:
+  - `Inbox Copilot/Ready`
+  - `Inbox Copilot/Needs review`
+  - `Inbox Copilot/Error`
+
+Semantics:
+- Labels are applied at thread scope in v1.
+- State labels are mutually exclusive: at most one of Ready / Needs review / Error on a thread.
+- Shared code defines canonical state keys: `ready`, `needs_review`, `error`.
+
+When to apply:
+- `Ready`: a draft was created/updated successfully and is safe for operator review/send.
+- `Needs review`: sensitive content, user-edited draft protection triggered, or ambiguity requiring human decision.
+- `Error`: repeated processing failure, auth revoked, or unrecoverable provider/processing error.
+
+High-level removal rule:
+- Replace prior state label when state changes.
+- Remove copilot state labels when a thread is considered handled/closed in later lifecycle work (detailed rules in Step 6.7).
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`
