@@ -171,6 +171,37 @@ Failure and retry safety:
 - Idempotency keys and single-flight expectations prevent duplicate side effects.
 - Lock TTLs and heartbeats are runtime concerns; contract requires safe re-entry.
 
+## B.6) Draft lifecycle state machine (v1)
+Text diagram:
+- Notification
+  -> `listChanges(cursor)`
+  -> `deriveWorkItems`
+  -> thread single-flight `(mailboxId, threadId)`
+  -> `getThread`
+  -> `triageThreadForCopilot`
+  -> `ignore` | `needs_review` | `draft`
+  -> if `draft`: check existing draft ownership + fingerprint
+  -> `upsert_draft` OR `blocked_user_edited`
+  -> apply exclusive state label (`Ready` / `Needs review` / `Error`)
+
+Invariants:
+- Never overwrite human edits:
+  - missing/invalid marker or fingerprint mismatch must return `blocked_user_edited`.
+- Exclusive label states:
+  - only one of `Ready`, `Needs review`, `Error` may be present at a time.
+- Idempotency units:
+  - message: `(mailboxId, messageId)`
+  - draft slot: `(mailboxId, threadId, kind="copilot_reply")`
+  - thread serialization key: `(mailboxId, threadId)`
+- Planner is pure and deterministic:
+  - no provider calls, queue calls, or persistence side effects.
+
+Outcome table:
+- `ignore` -> `noop` (no draft mutation, no state promotion).
+- `needs_review` -> `label_only` with `Needs review`.
+- `draft` -> `upsert_draft` intent with `Ready`, reply target, and idempotency keys.
+- `blocked_user_edited` -> stop updates and route `Needs review`.
+
 ## C) Event pipeline contract (internal)
 Canonical event types:
 - `mail.message.received`
