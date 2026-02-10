@@ -20,3 +20,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 2.7 | 2026-02-10 | SELF | Added canonical mail models and MailProvider interface in shared package. |  |
 | 2.8 | 2026-02-10 | SELF | Added GmailProvider adapter scaffold implementing MailProvider (stubbed). |  |
 | 2.8.1 | 2026-02-10 | SELF | Added mail-gmail README with construction examples. |  |
+| 2.9 | 2026-02-10 | SELF | Added runtime mail provider registry composition root (gmail wired, outlook placeholder). |  |

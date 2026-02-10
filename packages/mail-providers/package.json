@@ -1,0 +1,13 @@
+{
+  "name": "@ai-email/mail-providers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@ai-email/shared": "workspace:*",
+    "@ai-email/mail-gmail": "workspace:*"
+  }
+}
