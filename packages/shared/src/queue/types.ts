@@ -85,21 +85,29 @@ export type JobMeta = {
   provider: MailProvider;
   tenantId: TenantId;
   mailboxId: MailboxId;
-  threadId?: string;
-  messageId?: string;
+  threadId?: ProviderThreadId;
+  messageId?: ProviderMessageId;
   gmailHistoryId?: string;
   correlationId: string;
   causationId?: string;
   receivedAt: string;
 };
 
-export type NotificationIngestPayload = {
-  providerCursor?: string;
-  gmailHistoryId?: string;
+export type NotificationIngestMeta = {
   notificationId?: string;
   subscriptionId?: string;
   publishedAt?: string;
 };
+
+export type NotificationIngestPayload =
+  | (NotificationIngestMeta & {
+      providerCursor: string;
+      gmailHistoryId?: string;
+    })
+  | (NotificationIngestMeta & {
+      gmailHistoryId: string;
+      providerCursor?: string;
+    });
 
 export type HistorySyncPayload = {
   startCursor?: string;

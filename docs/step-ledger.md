@@ -67,3 +67,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.11 | 2026-02-12 | SELF | Closed out Phase 9 (operator setup + minimal admin UX) with evidence gate and milestone map. |  |
 | 10.1 | 2026-02-12 | SELF | Added Phase 10 reliability/observability baseline DR + pilot runbook skeleton. |  |
 | 10.2 | 2026-02-12 | SELF | Defined queue taxonomy + typed job contracts in shared package. |  |
+| 10.2.1 | 2026-02-12 | SELF | Tightened queue contracts: ingest cursor union + provider ID meta typing. |  |
