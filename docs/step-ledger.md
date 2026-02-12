@@ -65,3 +65,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.7 | 2026-02-12 | SELF | Implemented real docs upload to S3 + persisted doc records and ingestion triggering; admin wired behind env with localStorage sync. |  |
 | 9.9 | 2026-02-12 | SELF | Implemented System Health dashboard with real Gmail + docs signals (env-gated) and clear placeholders. |  |
 | 9.11 | 2026-02-12 | SELF | Closed out Phase 9 (operator setup + minimal admin UX) with evidence gate and milestone map. |  |
+| 10.1 | 2026-02-12 | SELF | Added Phase 10 reliability/observability baseline DR + pilot runbook skeleton. |  |

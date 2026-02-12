@@ -1,0 +1,190 @@
+# Pilot Runbook: Reliability & Observability (Phase 10)
+
+## Purpose & scope
+This runbook defines pilot operations readiness, incident triage, mitigation, recovery, and evidence capture for the Gmail-first draft pipeline. It is designed for safe operations where no customer email is auto-sent in v1.
+
+## Definitions
+- tenant: operator account boundary and isolation unit.
+- mailbox: connected inbox identity under a tenant.
+- thread: provider conversation containing one or more messages.
+- job: queued work unit for processing a stage.
+- stage: pipeline step (ingest, fetch, classify, generate, writeback).
+- DLQ: dead-letter queue for jobs that cannot complete through normal retry policy.
+- replay: controlled reprocessing of failed or historical events.
+- idempotency: deterministic prevention of duplicate side effects for repeated inputs.
+- checkpoint lag: delay between latest provider event and system checkpoint/cursor progress.
+
+## What good looks like (daily checklist)
+- Queue depth and oldest job age are within baseline thresholds.
+- p50 and p95 time-to-draft are stable and within pilot targets.
+- Draft success rate is stable; review routing rate is explainable.
+- Gmail auth and watch health are green for active tenants.
+- DLQ rate is low and bounded; all DLQ entries have clear reason codes.
+- Checkpoint lag is near real-time for active mailboxes.
+- No unexplained duplicate draft reports.
+
+## Key metrics to watch (baseline)
+
+### Pipeline
+- Time-to-draft p50 and p95
+- Draft success rate
+- Human-review routing rate
+
+### Queue
+- Queue depth
+- Oldest job age
+- Throughput
+- Retry rate
+- DLQ rate
+
+### Provider
+- Gmail 401/403/429/5xx rates
+- Pub/Sub notification volume and duplicate rate
+- OpenAI error rate and latency
+
+### Integrity
+- Dedupe hit rate
+- Checkpoint lag
+
+## Alert thresholds (pilot defaults)
+Defaults below are starting points and should be tuned during pilot:
+- DLQ rate > 0.5% over 15 minutes
+- p95 time-to-draft > 2 minutes over 30 minutes
+- Queue oldest job age > 5 minutes
+- Gmail 401/403 spikes above normal baseline
+
+## Triage flows
+
+### 1) No drafts being created
+Likely causes:
+- Global/per-tenant kill switch enabled.
+- Queue stalled or worker down.
+- Gmail auth/watch invalid.
+- Upstream generation failures.
+
+What to check:
+- Recent ingest volume vs generated draft count.
+- Worker heartbeat and queue processing throughput.
+- Kill switch states (global and affected tenants).
+- Gmail 401/403/429/5xx and OpenAI error metrics.
+
+What to do next:
+- Use least disruptive mitigation first (tenant-scope before global).
+- Restore worker/queue health if stalled.
+- Re-auth affected mailboxes if auth failure is confirmed.
+- Route failed items to DLQ and start scoped replay after fix.
+
+### 2) Queue growing / oldest age increasing
+Likely causes:
+- Insufficient worker concurrency.
+- Provider latency/rate limiting.
+- Retry storm from transient failures.
+
+What to check:
+- Queue depth trend, oldest age trend, and retry rate.
+- Worker process health and recent deploy/config changes.
+- Gmail/OpenAI latency and 429/5xx rates.
+
+What to do next:
+- Reduce failure amplification (tune retry/backoff, pause noisy tenant if needed).
+- Temporarily disable non-critical stages (writeback or OpenAI) if backlog threatens SLA.
+- Scale workers only after confirming idempotency and provider limits are respected.
+
+### 3) Gmail auth revoked / 401/403 spike
+Likely causes:
+- OAuth token invalidation/revocation.
+- Scope or consent drift.
+- Tenant-specific credential issues.
+
+What to check:
+- 401 vs 403 distribution by tenant/mailbox.
+- Token refresh failures and last successful auth timestamp.
+- Recent admin changes for Gmail connection settings.
+
+What to do next:
+- Disable processing per affected tenant to avoid repeated failures.
+- Trigger reconnect flow and confirm minimum required scopes.
+- Replay only tenant-scoped failed jobs after auth recovery.
+
+### 4) OpenAI failures / latency spike
+Likely causes:
+- Provider-side latency incident.
+- Model quota/rate-limit pressure.
+- Prompt/runtime payload regression.
+
+What to check:
+- OpenAI error classes, latency percentiles, and throughput drop.
+- Retry rates and queue buildup at generation stage.
+- Any recent prompt/template/runtime config changes.
+
+What to do next:
+- Disable OpenAI path if needed; force human review or holding-template flow.
+- Keep ingestion and state tracking running where safe.
+- Resume generation gradually and monitor p95 + error rate before full re-enable.
+
+### 5) Duplicate drafts suspected
+Likely causes:
+- Missing/incorrect idempotency key at one stage.
+- Replay scope too broad.
+- Provider duplicate delivery not fully deduped.
+
+What to check:
+- Dedupe hit metrics and idempotency key logs for affected thread/job.
+- Audit trail for replay actions and operator interventions.
+- Writeback stage logs for repeated side-effect attempts.
+
+What to do next:
+- Freeze writeback for affected tenant if duplicate risk is active.
+- Correct idempotency behavior before replay.
+- Run scoped replay and verify exactly-once outcomes per thread.
+
+## Mitigations (kill switches)
+Use the least disruptive switch first.
+- Global stop-the-world: halt all processing when blast radius is unknown or severe.
+- Per-tenant processing disable: isolate one tenant without impacting others.
+- Disable writeback only: continue upstream processing while preventing draft writes.
+- Disable OpenAI only: hold templates or force review while provider stabilizes.
+- Force human review mode: allow safe progression without autonomous draft generation.
+
+## Recovery
+- DLQ replay:
+  - Scope by tenant, mailbox, stage, and time window.
+  - Record audit fields: operator, reason, scope, start/end time.
+- History-range replay:
+  - Use bounded ranges for catch-up after outages.
+  - Prefer smallest range that restores consistency.
+- Before replaying:
+  - Confirm root cause is mitigated.
+  - Confirm idempotency checks are active and validated.
+- After replaying:
+  - Verify no duplicate drafts were produced.
+  - Verify checkpoint lag returns to normal.
+
+## Escalation + incident notes template
+Escalate when thresholds persist after first mitigation, customer impact is active, or root cause is unknown.
+
+Incident notes template:
+- Incident ID:
+- Start time / detection time:
+- Detection source (alert/manual/customer report):
+- Affected tenants/mailboxes:
+- Symptoms observed:
+- Suspected cause:
+- Mitigations applied (with timestamps):
+- Kill switches used:
+- Replay scope executed:
+- Current status:
+- Owner:
+
+## Post-incident checklist
+- Capture metric screenshots/exports for key windows.
+- Record affected tenants/mailboxes/threads and impact summary.
+- Build timeline of detection, mitigation, recovery, and close.
+- Document decisions made and why.
+- Confirm idempotency and replay audit logs are complete.
+- Identify permanent fixes and owners.
+- Map evidence to Phase 10 proof points:
+  - No lost emails during failure window.
+  - No duplicate drafts during retries/replay.
+  - Controlled mitigation via kill switches.
+  - Audited and scoped recovery execution.
