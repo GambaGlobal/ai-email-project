@@ -188,6 +188,109 @@ a {
   cursor: not-allowed;
 }
 
+.gmail-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.gmail-helper {
+  margin: 0;
+  color: var(--muted);
+}
+
+.gmail-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #9fb3c8, #486581, #9fb3c8);
+  background-size: 200% 100%;
+  animation: progress-pulse 1s linear infinite;
+}
+
+@keyframes progress-pulse {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.status-connected {
+  background: #e3f9e5;
+  border-color: #7bc47f;
+  color: #1f513f;
+}
+
+.status-reconnect {
+  background: #fff7d6;
+  border-color: #f0b429;
+  color: #8d2b0b;
+}
+
+.status-error {
+  background: #ffe3e3;
+  border-color: #f86a6a;
+  color: #911111;
+}
+
+.gmail-error-details {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.onboarding-dev-controls {
+  margin-top: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.onboarding-dev-controls summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.onboarding-dev-actions {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.onboarding-dev-actions button {
+  justify-self: start;
+}
+
+.simulate-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.onboarding-note {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
 .onboarding-restart {
   margin-top: 10px;
 }

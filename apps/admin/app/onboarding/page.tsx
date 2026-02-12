@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const STORAGE_KEY = "onboarding_step";
+const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
+const GMAIL_LAST_VERIFIED_KEY = "gmail_last_verified";
+
+type GmailConnectionState =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "reconnect_required";
 
 const steps = [
   {
@@ -34,6 +43,14 @@ const steps = [
   }
 ];
 
+const validConnectionStates: GmailConnectionState[] = [
+  "disconnected",
+  "connecting",
+  "connected",
+  "error",
+  "reconnect_required"
+];
+
 function clampStepIndex(value: number): number {
   if (Number.isNaN(value)) {
     return 0;
@@ -42,10 +59,40 @@ function clampStepIndex(value: number): number {
   return Math.min(Math.max(value, 0), steps.length - 1);
 }
 
+function parseConnectionState(value: string | null): GmailConnectionState {
+  if (value && validConnectionStates.includes(value as GmailConnectionState)) {
+    return value as GmailConnectionState;
+  }
+
+  return "disconnected";
+}
+
+function formatLastVerified(value: string | null): string {
+  if (!value) {
+    return "—";
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "—";
+  }
+
+  return parsed.toLocaleString();
+}
+
 export default function OnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0);
+  const [gmailConnectionState, setGmailConnectionState] =
+    useState<GmailConnectionState>("disconnected");
+  const [lastVerifiedAt, setLastVerifiedAt] = useState<string | null>(null);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [simulateTestFailure, setSimulateTestFailure] = useState(false);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
+  const connectTimeoutRef = useRef<number | null>(null);
+  const testTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const storedStep = window.localStorage.getItem(STORAGE_KEY);
@@ -58,6 +105,38 @@ export default function OnboardingPage() {
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, String(currentStep));
   }, [currentStep]);
+
+  useEffect(() => {
+    const storedConnectionState = window.localStorage.getItem(GMAIL_CONNECTION_STATE_KEY);
+    const storedLastVerified = window.localStorage.getItem(GMAIL_LAST_VERIFIED_KEY);
+    setGmailConnectionState(parseConnectionState(storedConnectionState));
+    setLastVerifiedAt(storedLastVerified);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(GMAIL_CONNECTION_STATE_KEY, gmailConnectionState);
+  }, [gmailConnectionState]);
+
+  useEffect(() => {
+    if (lastVerifiedAt) {
+      window.localStorage.setItem(GMAIL_LAST_VERIFIED_KEY, lastVerifiedAt);
+      return;
+    }
+
+    window.localStorage.removeItem(GMAIL_LAST_VERIFIED_KEY);
+  }, [lastVerifiedAt]);
+
+  useEffect(() => {
+    return () => {
+      if (connectTimeoutRef.current !== null) {
+        window.clearTimeout(connectTimeoutRef.current);
+      }
+
+      if (testTimeoutRef.current !== null) {
+        window.clearTimeout(testTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const goNext = () => {
     if (!isFinalStep) {
@@ -72,6 +151,202 @@ export default function OnboardingPage() {
   const restart = () => {
     window.localStorage.removeItem(STORAGE_KEY);
     setCurrentStep(0);
+  };
+
+  const beginConnectFlow = () => {
+    if (connectTimeoutRef.current !== null) {
+      window.clearTimeout(connectTimeoutRef.current);
+    }
+
+    setShowErrorDetails(false);
+    setGmailConnectionState("connecting");
+    connectTimeoutRef.current = window.setTimeout(() => {
+      setGmailConnectionState("connected");
+    }, 1000);
+  };
+
+  const disconnectGmail = () => {
+    if (connectTimeoutRef.current !== null) {
+      window.clearTimeout(connectTimeoutRef.current);
+    }
+
+    if (testTimeoutRef.current !== null) {
+      window.clearTimeout(testTimeoutRef.current);
+    }
+
+    setIsTestingConnection(false);
+    setShowErrorDetails(false);
+    setGmailConnectionState("disconnected");
+    setLastVerifiedAt(null);
+  };
+
+  const setMockConnectionState = (state: GmailConnectionState) => {
+    if (connectTimeoutRef.current !== null) {
+      window.clearTimeout(connectTimeoutRef.current);
+    }
+
+    if (testTimeoutRef.current !== null) {
+      window.clearTimeout(testTimeoutRef.current);
+    }
+
+    setIsTestingConnection(false);
+    setShowErrorDetails(false);
+    setGmailConnectionState(state);
+  };
+
+  const testConnection = () => {
+    if (gmailConnectionState !== "connected") {
+      return;
+    }
+
+    if (testTimeoutRef.current !== null) {
+      window.clearTimeout(testTimeoutRef.current);
+    }
+
+    setIsTestingConnection(true);
+    testTimeoutRef.current = window.setTimeout(() => {
+      if (simulateTestFailure) {
+        setGmailConnectionState("error");
+        setShowErrorDetails(true);
+      } else {
+        setLastVerifiedAt(new Date().toISOString());
+      }
+
+      setIsTestingConnection(false);
+    }, 900);
+  };
+
+  const renderConnectPanel = () => {
+    const lastVerifiedLabel = formatLastVerified(lastVerifiedAt);
+
+    if (gmailConnectionState === "connecting") {
+      return (
+        <div className="gmail-panel">
+          <button type="button" disabled>
+            Connecting...
+          </button>
+          <div className="gmail-progress" aria-hidden="true" />
+          <p className="gmail-helper">Connecting your Gmail account now.</p>
+        </div>
+      );
+    }
+
+    if (gmailConnectionState === "connected") {
+      return (
+        <div className="gmail-panel">
+          <span className="status-badge status-connected">Connected</span>
+          <p className="gmail-helper">
+            Gmail is connected. You can verify draft permissions before continuing.
+          </p>
+          <p className="gmail-helper">
+            <strong>Last verified:</strong> {lastVerifiedLabel}
+          </p>
+          <div className="onboarding-actions">
+            <button type="button" onClick={testConnection} disabled={isTestingConnection}>
+              {isTestingConnection ? "Testing..." : "Test connection"}
+            </button>
+            <button type="button" onClick={disconnectGmail}>
+              Disconnect
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (gmailConnectionState === "reconnect_required") {
+      return (
+        <div className="gmail-panel">
+          <span className="status-badge status-reconnect">Reconnect required</span>
+          <p className="gmail-helper">
+            Access expired. Reconnect Gmail to continue generating drafts.
+          </p>
+          <button type="button" onClick={beginConnectFlow}>
+            Reconnect Gmail
+          </button>
+        </div>
+      );
+    }
+
+    if (gmailConnectionState === "error") {
+      return (
+        <div className="gmail-panel">
+          <span className="status-badge status-error">Connection error</span>
+          <p className="gmail-helper">
+            We could not verify Gmail access. Please try again in a moment.
+          </p>
+          <div className="onboarding-actions">
+            <button type="button" onClick={beginConnectFlow}>
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowErrorDetails((value) => !value);
+              }}
+            >
+              View details
+            </button>
+          </div>
+          {showErrorDetails ? (
+            <pre className="gmail-error-details">
+              {`Mock error code: GMAIL_OAUTH_REFRESH_FAILED
+Detail: Token refresh rejected in OAuth callback simulation.`}
+            </pre>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="gmail-panel">
+        <p className="gmail-helper">
+          Connect Gmail so we can read thread context and create drafts in Gmail. We never
+          auto-send.
+        </p>
+        <button type="button" onClick={beginConnectFlow}>
+          Connect Gmail
+        </button>
+      </div>
+    );
+  };
+
+  const renderStepContent = () => {
+    if (step.title !== "Connect Gmail") {
+      return <div className="onboarding-placeholder">{step.placeholder}</div>;
+    }
+
+    return (
+      <>
+        {renderConnectPanel()}
+        <details className="onboarding-dev-controls">
+          <summary>Developer controls (UX mock only)</summary>
+          <div className="onboarding-dev-actions">
+            <button type="button" onClick={() => setMockConnectionState("reconnect_required")}>
+              Simulate reconnect required
+            </button>
+            <button type="button" onClick={() => setMockConnectionState("error")}>
+              Simulate error
+            </button>
+            <button type="button" onClick={() => setMockConnectionState("connected")}>
+              Simulate success
+            </button>
+            <label className="simulate-toggle">
+              <input
+                type="checkbox"
+                checked={simulateTestFailure}
+                onChange={(event) => {
+                  setSimulateTestFailure(event.target.checked);
+                }}
+              />
+              Simulate failure on next test
+            </label>
+          </div>
+        </details>
+        <p className="onboarding-note">
+          Drafts are created in Gmail as drafts only. We never auto-send.
+        </p>
+      </>
+    );
   };
 
   return (
@@ -112,7 +387,7 @@ export default function OnboardingPage() {
         <article className="placeholder-card onboarding-panel" aria-live="polite">
           <h2>{step.title}</h2>
           <p>{step.description}</p>
-          <div className="onboarding-placeholder">{step.placeholder}</div>
+          {renderStepContent()}
           <div className="onboarding-actions">
             <button type="button" onClick={goBack} disabled={currentStep === 0}>
               Back
