@@ -51,3 +51,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 8.5 | 2026-02-10 | SELF | Added Phase 8 operator review UX spec (Gmail-first). |  |
 | 8.6 | 2026-02-10 | SELF | Added Phase 8 golden dataset + evaluation plan (v1). |  |
 | 8.7 | 2026-02-10 | SELF | Added Phase 8 tenant customization boundaries spec (v1). |  |
+| 9.1 | 2026-02-12 | SELF | Added Phase 9 Decision Record for operator setup + minimal admin UX. |  |
