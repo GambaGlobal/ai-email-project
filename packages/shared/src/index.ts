@@ -34,7 +34,6 @@ export type {
   JobEnvelope,
   JobMeta,
   JobStage,
-  MailProvider,
   MailJobInput,
   NotificationIngestPayload,
   QueueName,

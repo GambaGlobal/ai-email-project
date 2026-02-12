@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "next build",
     "start": "next start"
   },

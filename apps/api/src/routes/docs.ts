@@ -75,6 +75,16 @@ function resolveMailboxIdFromHeader(headers: Record<string, unknown>): string | 
   return typeof mailboxHeader === "string" ? mailboxHeader : undefined;
 }
 
+function resolveMultipartFieldValue(
+  field: unknown
+): string | undefined {
+  const normalized = Array.isArray(field) ? field[0] : field;
+  if (!normalized || typeof normalized !== "object" || !("value" in normalized)) {
+    return undefined;
+  }
+  return typeof normalized.value === "string" ? normalized.value : undefined;
+}
+
 const docsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v1/docs", async (request, reply) => {
     const tenantId = resolveTenantIdFromHeader(request);
@@ -94,9 +104,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Missing file upload" });
     }
 
-    const categoryRaw = filePart.fields.category;
-    const categoryValue =
-      categoryRaw && typeof categoryRaw.value === "string" ? categoryRaw.value : undefined;
+    const categoryValue = resolveMultipartFieldValue(filePart.fields.category);
 
     if (!isValidCategory(categoryValue)) {
       return reply.code(400).send({ error: "Invalid category" });
@@ -312,11 +320,9 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
     }
 
-    let docToDelete: Record<string, unknown> | null = null;
-
     try {
-      await withTenantClient(tenantId, async (client) => {
-        docToDelete = await queryOne(
+      const docToDelete = await withTenantClient(tenantId, async (client) => {
+        const row = await queryOne(
           client,
           `
             SELECT id, storage_key
@@ -327,8 +333,8 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
           [tenantId, request.params.id]
         );
 
-        if (!docToDelete) {
-          return;
+        if (!row) {
+          return null;
         }
 
         await client.query(
@@ -339,29 +345,32 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
           `,
           [tenantId, request.params.id]
         );
+
+        return row;
       });
+
+      if (!docToDelete) {
+        return reply.code(404).send({ error: "Document not found" });
+      }
+
+      try {
+        const storageKey =
+          typeof docToDelete.storage_key === "string" ? docToDelete.storage_key : null;
+        if (storageKey) {
+          await deleteDocObject({
+            bucket: resolveDocsBucket(),
+            key: storageKey
+          });
+        }
+      } catch (error) {
+        request.log.error({ error }, "Best-effort S3 delete failed");
+      }
+
+      return reply.code(204).send();
     } catch (error) {
       request.log.error({ error }, "Failed to delete doc");
       return reply.code(500).send({ error: "Unable to delete doc" });
     }
-
-    if (!docToDelete) {
-      return reply.code(404).send({ error: "Document not found" });
-    }
-
-    try {
-      const storageKey = typeof docToDelete.storage_key === "string" ? docToDelete.storage_key : null;
-      if (storageKey) {
-        await deleteDocObject({
-          bucket: resolveDocsBucket(),
-          key: storageKey
-        });
-      }
-    } catch (error) {
-      request.log.error({ error }, "Best-effort S3 delete failed");
-    }
-
-    return reply.code(204).send();
   });
 
   app.post<{ Params: { id: string } }>("/v1/docs/:id/retry", async (request, reply) => {

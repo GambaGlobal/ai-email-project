@@ -26,34 +26,34 @@ export class GmailProvider implements MailProvider {
     _context: MailProviderContext,
     _req: ListChangesRequest
   ): Promise<ListChangesResponse> {
-    notImplemented("listChanges");
+    return notImplemented("listChanges");
   }
 
   async getThread(
     _context: MailProviderContext,
     _req: GetThreadRequest
   ): Promise<GetThreadResponse> {
-    notImplemented("getThread");
+    return notImplemented("getThread");
   }
 
   async ensureLabel(
     _context: MailProviderContext,
     _req: EnsureLabelRequest
   ): Promise<EnsureLabelResponse> {
-    notImplemented("ensureLabel");
+    return notImplemented("ensureLabel");
   }
 
   async modifyThreadLabels(
     _context: MailProviderContext,
     _req: ModifyThreadLabelsRequest
   ): Promise<void> {
-    notImplemented("modifyThreadLabels");
+    return notImplemented("modifyThreadLabels");
   }
 
   async upsertThreadDraft(
     _context: MailProviderContext,
     _req: UpsertThreadDraftRequest
   ): Promise<UpsertThreadDraftResponse> {
-    notImplemented("upsertThreadDraft");
+    return notImplemented("upsertThreadDraft");
   }
 }

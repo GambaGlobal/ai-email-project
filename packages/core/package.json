@@ -1,5 +1,12 @@
 {
   "name": "@ai-email/core",
   "version": "0.0.0",
-  "private": true
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

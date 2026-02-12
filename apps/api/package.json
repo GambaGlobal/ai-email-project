@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@ai-email/shared": "workspace:*",
@@ -12,7 +13,7 @@
     "@fastify/multipart": "^8.3.1",
     "bullmq": "^5.12.12",
     "fastify": "^4.26.2",
-    "ioredis": "^5.4.1",
+    "ioredis": "5.9.2",
     "pg": "^8.11.5",
     "redis": "^4.7.0"
   },

@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "node-pg-migrate -c migrate.config.cjs up",
     "db:rollback": "node-pg-migrate -c migrate.config.cjs down 1",
     "db:create": "node-pg-migrate -c migrate.config.cjs create"

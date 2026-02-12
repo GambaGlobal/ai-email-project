@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@ai-email/shared": "workspace:*",
     "bullmq": "^5.12.12",
-    "ioredis": "^5.4.1",
+    "ioredis": "5.9.2",
     "pg": "^8.11.5"
   },
   "devDependencies": {

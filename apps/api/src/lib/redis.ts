@@ -1,9 +1,11 @@
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 
-let redisClient: RedisClientType | null = null;
-let connectPromise: Promise<RedisClientType> | null = null;
+type RedisClient = ReturnType<typeof createClient>;
 
-export async function getRedisClient(): Promise<RedisClientType> {
+let redisClient: RedisClient | null = null;
+let connectPromise: Promise<RedisClient> | null = null;
+
+export async function getRedisClient(): Promise<RedisClient> {
   if (redisClient?.isOpen) {
     return redisClient;
   }

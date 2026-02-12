@@ -67,7 +67,8 @@ const SENSITIVE_KEYWORDS: Record<
     "special request",
     "waive",
     "policy exception"
-  ]
+  ],
+  thread_has_user_draft: []
 };
 
 const normalize = (value: string): string => value.trim().toLowerCase();

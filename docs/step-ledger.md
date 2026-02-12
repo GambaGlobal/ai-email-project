@@ -70,3 +70,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.2.1 | 2026-02-12 | SELF | Tightened queue contracts: ingest cursor union + provider ID meta typing. |  |
 | 10.7 | 2026-02-12 | SELF | Added structured logging baseline + correlationId alignment across shared/API/worker. |  |
 | 10.7.1 | 2026-02-12 | SELF | Hardened correlationId + safe structured logging (helpers + enqueue defaults). |  |
+| 10.0.1 | 2026-02-12 | SELF | Strengthened repo:check with workspace TypeScript typecheck gate. |  |
