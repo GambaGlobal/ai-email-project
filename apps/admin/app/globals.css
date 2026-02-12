@@ -605,3 +605,136 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+.health-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.health-header button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+}
+
+.health-header button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.health-banner {
+  margin-top: 14px;
+  border-radius: 8px;
+  border: 1px solid #f7c948;
+  background: #fff7d6;
+  color: #8d2b0b;
+  padding: 10px 12px;
+}
+
+.health-banner-error {
+  border-color: #f86a6a;
+  background: #ffe3e3;
+  color: #911111;
+}
+
+.health-updated {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.health-grid {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.health-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.health-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.health-card p {
+  margin-top: 10px;
+}
+
+.health-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.health-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.health-chip-green {
+  background: #e3f9e5;
+  border-color: #7bc47f;
+  color: #1f513f;
+}
+
+.health-chip-yellow {
+  background: #fff4d1;
+  border-color: #f7c948;
+  color: #8d2b0b;
+}
+
+.health-chip-red {
+  background: #ffe3e3;
+  border-color: #f86a6a;
+  color: #911111;
+}
+
+.health-card details {
+  margin-top: 10px;
+}
+
+.health-card summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.health-card ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.health-link {
+  margin-top: 10px;
+  display: inline-flex;
+  text-decoration: underline;
+  color: var(--text);
+}
+
+@media (max-width: 880px) {
+  .health-header {
+    flex-direction: column;
+  }
+
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+}
