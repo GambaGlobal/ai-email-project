@@ -61,3 +61,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.10 | 2026-02-12 | SELF | Added Enable Drafts gating step based on Gmail connection + indexed docs, with local persistence. |  |
 | 9.5 | 2026-02-12 | SELF | Implemented real Gmail OAuth connect endpoints + persisted tenant connection state (admin wired behind env). |  |
 | 9.5.1 | 2026-02-12 | SELF | Hardened Gmail OAuth state storage with Redis TTL + one-time consume and tightened tenant resolution rules. |  |
+| 9.5.2 | 2026-02-12 | SELF | Fixed admin status fetch by sending x-tenant-id header (env-driven) to match tightened tenant resolution. |  |

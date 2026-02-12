@@ -13,8 +13,7 @@ const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
 // Optional admin env wiring for real OAuth connect:
 // NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
-const API_TENANT_ID =
-  process.env.NEXT_PUBLIC_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
+const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID;
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
 const UPLOAD_DOCS_STEP_INDEX = 2;
@@ -182,6 +181,7 @@ export default function OnboardingPage() {
   });
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
+  const hasTenantIdForRealApi = Boolean(API_TENANT_ID);
   const connectTimeoutRef = useRef<number | null>(null);
   const testTimeoutRef = useRef<number | null>(null);
 
@@ -341,7 +341,7 @@ export default function OnboardingPage() {
   };
 
   const refreshRealConnectionStatus = async () => {
-    if (!API_BASE_URL) {
+    if (!API_BASE_URL || !API_TENANT_ID) {
       return;
     }
 
@@ -350,10 +350,12 @@ export default function OnboardingPage() {
 
     try {
       const statusUrl = new URL("/v1/mail/gmail/connection", API_BASE_URL);
-      statusUrl.searchParams.set("tenant_id", API_TENANT_ID);
 
       const response = await fetch(statusUrl.toString(), {
-        method: "GET"
+        method: "GET",
+        headers: {
+          "x-tenant-id": API_TENANT_ID
+        }
       });
 
       if (!response.ok) {
@@ -390,7 +392,7 @@ export default function OnboardingPage() {
   };
 
   const startRealConnectFlow = () => {
-    if (!API_BASE_URL) {
+    if (!API_BASE_URL || !API_TENANT_ID) {
       return;
     }
 
@@ -430,7 +432,7 @@ export default function OnboardingPage() {
               <button
                 type="button"
                 onClick={refreshRealConnectionStatus}
-                disabled={isRefreshingRealStatus}
+                disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
               >
                 {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
               </button>
@@ -458,13 +460,13 @@ export default function OnboardingPage() {
           </p>
           {API_BASE_URL ? (
             <div className="onboarding-actions">
-              <button type="button" onClick={startRealConnectFlow}>
+              <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
                 Reconnect Gmail (real)
               </button>
               <button
                 type="button"
                 onClick={refreshRealConnectionStatus}
-                disabled={isRefreshingRealStatus}
+                disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
               >
                 {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
               </button>
@@ -487,7 +489,7 @@ export default function OnboardingPage() {
           </p>
           <div className="onboarding-actions">
             {API_BASE_URL ? (
-              <button type="button" onClick={startRealConnectFlow}>
+              <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
                 Try again (real)
               </button>
             ) : (
@@ -522,13 +524,13 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
         </p>
         {API_BASE_URL ? (
           <div className="onboarding-actions">
-            <button type="button" onClick={startRealConnectFlow}>
+            <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
               Connect Gmail (real)
             </button>
             <button
               type="button"
               onClick={refreshRealConnectionStatus}
-              disabled={isRefreshingRealStatus}
+              disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
             >
               {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
             </button>
@@ -672,6 +674,11 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
               </label>
             </div>
           </details>
+        ) : null}
+        {API_BASE_URL && !hasTenantIdForRealApi ? (
+          <p className="onboarding-note">
+            Set NEXT_PUBLIC_TENANT_ID to enable real connection status checks.
+          </p>
         ) : null}
         <p className="onboarding-note">
           Drafts are created in Gmail as drafts only. We never auto-send.
