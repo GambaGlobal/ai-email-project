@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
-import { newCorrelationId } from "@ai-email/shared";
+import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
 import { deleteDocObject, putDocObject, resolveDocsBucket } from "../lib/s3.js";
@@ -75,6 +75,14 @@ function resolveMailboxIdFromHeader(headers: Record<string, unknown>): string | 
   return typeof mailboxHeader === "string" ? mailboxHeader : undefined;
 }
 
+function resolveCorrelationIdFromHeader(headers: Record<string, unknown>) {
+  const correlationHeader = headers["x-correlation-id"];
+  if (typeof correlationHeader === "string" && correlationHeader.trim().length > 0) {
+    return asCorrelationId(correlationHeader);
+  }
+  return newCorrelationId();
+}
+
 function resolveMultipartFieldValue(
   field: unknown
 ): string | undefined {
@@ -120,7 +128,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     const safeFilename = originalFilename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const bucket = resolveDocsBucket();
     const storageKey = `tenants/${tenantId}/docs/${docId}/${safeFilename}`;
-    const correlationId = newCorrelationId();
+    const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
     const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
     const stage = "doc_ingestion";
     const queueName = "docs_ingestion";
@@ -410,7 +418,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ error: "Document storage pointer missing" });
       }
 
-      const correlationId = newCorrelationId();
+      const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
       const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
       const stage = "doc_ingestion";
       const queueName = "docs_ingestion";

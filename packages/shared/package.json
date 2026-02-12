@@ -7,6 +7,8 @@
   },
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pipeline/ids": "./src/pipeline/ids.ts",
+    "./pipeline/ids-runtime": "./src/pipeline/ids-runtime.mjs"
   }
 }

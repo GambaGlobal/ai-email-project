@@ -5,6 +5,7 @@
   "scripts": {
     "preflight": "node ./scripts/preflight.mjs",
     "typecheck": "node ./scripts/typecheck.mjs",
+    "smoke:correlation": "node ./scripts/smoke-correlation.mjs",
     "typecheck:full": "turbo run typecheck --output-logs=full",
     "typecheck:errors": "turbo run typecheck --output-logs=errors-only",
     "typecheck:new": "turbo run typecheck --output-logs=new-only",
@@ -21,6 +22,7 @@
     "db:create": "pnpm --filter @ai-email/db db:create"
   },
   "devDependencies": {
+    "@ai-email/shared": "workspace:*",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.15.6",
     "turbo": "^2.3.3",

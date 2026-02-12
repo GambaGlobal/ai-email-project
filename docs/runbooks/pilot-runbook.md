@@ -88,6 +88,27 @@ Use the same structured keys in API + worker logs:
 4. Confirm worker logs include `job.start` and `job.done` with that same `correlationId`.
 5. If `correlationId` does not match across API and worker for the same job, stop and fix enqueue context propagation before pilot use.
 
+## Correlation E2E smoke
+Use this deterministic local sequence to prove the same `correlationId` flows API -> queue -> worker for docs ingestion:
+1. Start local infra if needed for queueing/storage: `pnpm dev:infra`
+2. Start API: `pnpm -w --filter @ai-email/api dev`
+3. Start worker: `pnpm -w --filter @ai-email/worker dev`
+4. Run smoke request: `pnpm -w smoke:correlation`
+5. Copy the `correlationId` from `SMOKE_REQUEST_SENT`.
+6. Confirm API logs contain `notification.received` and `notification.enqueued` with that same `correlationId`.
+7. Confirm worker logs contain `job.start` and `job.done` (or `job.error`) with that same `correlationId`.
+
+Core keys expected on these events:
+- event
+- correlationId
+- jobId (where applicable)
+- tenantId (if present)
+- startedAt / elapsedMs (worker events)
+
+Grep examples:
+- API logs: `grep "<correlationId>" <api-log-file> | grep -E "notification.received|notification.enqueued"`
+- Worker logs: `grep "<correlationId>" <worker-log-file> | grep -E "job.start|job.done|job.error"`
+
 ## Typecheck commands
 Use these commands for local reliability checks:
 - Canonical gate: `pnpm -w repo:check`

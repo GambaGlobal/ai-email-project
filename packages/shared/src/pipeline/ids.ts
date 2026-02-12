@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
+import {
+  asCorrelationId as asCorrelationIdRuntime,
+  newCorrelationId as newCorrelationIdRuntime
+} from "./ids-runtime.mjs";
 import type { CorrelationId } from "./types";
 
 export function asCorrelationId(value: string): CorrelationId {
-  return value as CorrelationId;
+  return asCorrelationIdRuntime(value) as CorrelationId;
 }
 
 export function newCorrelationId(): CorrelationId {
-  return asCorrelationId(randomUUID());
+  return newCorrelationIdRuntime() as CorrelationId;
 }
