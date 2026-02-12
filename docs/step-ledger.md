@@ -73,3 +73,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.0.1 | 2026-02-12 | SELF | Strengthened repo:check with workspace TypeScript typecheck gate. |  |
 | 10.0.2 | 2026-02-12 | SELF | Added safe Turbo typecheck wrapper scripts and documented no-flag-forwarding usage. |  |
 | 10.0.3 | 2026-02-12 | SELF | Added runbook preflight + install guardrails with root preflight script. |  |
+| 10.0.4 | 2026-02-12 | SELF | Gated PRs/main pushes with CI running install (frozen), preflight, and repo:check. |  |
