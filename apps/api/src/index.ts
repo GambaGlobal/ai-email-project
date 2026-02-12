@@ -1,8 +1,16 @@
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
 import gmailAuthRoutes from "./routes/gmail-auth.js";
 import gmailConnectionRoutes from "./routes/gmail-connection.js";
+import docsRoutes from "./routes/docs.js";
 
 const app = Fastify();
+
+await app.register(multipart, {
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  }
+});
 
 app.get("/healthz", async () => {
   return { ok: true, service: "api", ts: new Date().toISOString() };
@@ -10,6 +18,7 @@ app.get("/healthz", async () => {
 
 await app.register(gmailAuthRoutes);
 await app.register(gmailConnectionRoutes);
+await app.register(docsRoutes);
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";

@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "tsx src/index.ts"
   },
+  "dependencies": {
+    "bullmq": "^5.12.12",
+    "ioredis": "^5.4.1",
+    "pg": "^8.11.5"
+  },
   "devDependencies": {
     "tsx": "^4.19.2"
   }

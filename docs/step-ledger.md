@@ -62,3 +62,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.5 | 2026-02-12 | SELF | Implemented real Gmail OAuth connect endpoints + persisted tenant connection state (admin wired behind env). |  |
 | 9.5.1 | 2026-02-12 | SELF | Hardened Gmail OAuth state storage with Redis TTL + one-time consume and tightened tenant resolution rules. |  |
 | 9.5.2 | 2026-02-12 | SELF | Fixed admin status fetch by sending x-tenant-id header (env-driven) to match tightened tenant resolution. |  |
+| 9.7 | 2026-02-12 | SELF | Implemented real docs upload to S3 + persisted doc records and ingestion triggering; admin wired behind env with localStorage sync. |  |
