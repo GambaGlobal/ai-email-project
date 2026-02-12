@@ -57,3 +57,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.3.1 | 2026-02-12 | SELF | Aligned onboarding wizard steps to 5-step Phase 9 flow (Profile, Gmail, Docs, Defaults, Enable Drafts). |  |
 | 9.4 | 2026-02-12 | SELF | Added mocked Gmail connection UX states + test connection UI in onboarding. |  |
 | 9.6 | 2026-02-12 | SELF | Added mocked docs upload + categorization UI with status chips and local persistence. |  |
+| 9.8 | 2026-02-12 | SELF | Added mocked tone + escalation policies UI with local persistence and preview. |  |

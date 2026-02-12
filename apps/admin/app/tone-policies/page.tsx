@@ -1,3 +1,5 @@
+import { TonePoliciesManager } from "../components/tone-policies-manager";
+
 export default function TonePoliciesPage() {
   return (
     <div className="page">
@@ -7,21 +9,10 @@ export default function TonePoliciesPage() {
         defaults.
       </p>
 
-      <section className="placeholder-grid" aria-label="Tone and policies placeholders">
+      <section className="placeholder-grid" aria-label="Tone and policies manager">
         <article className="placeholder-card">
-          <h2>Preset picker</h2>
-          <ul>
-            <li>Tone preset selector placeholder</li>
-            <li>Advanced sliders placeholder</li>
-            <li>Live preview placeholder</li>
-          </ul>
-        </article>
-        <article className="placeholder-card">
-          <h2>Escalation rules</h2>
-          <ul>
-            <li>Refund/safety/medical/legal rules placeholder</li>
-            <li>Human review routing placeholder</li>
-          </ul>
+          <h2>Tone &amp; Policies Manager</h2>
+          <TonePoliciesManager />
         </article>
       </section>
     </div>

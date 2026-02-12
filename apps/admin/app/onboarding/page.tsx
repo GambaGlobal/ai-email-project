@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DocsManager } from "../components/docs-manager";
+import { TonePoliciesManager } from "../components/tone-policies-manager";
 
 const STORAGE_KEY = "onboarding_step";
 const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
@@ -314,6 +315,10 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
   const renderStepContent = () => {
     if (step.title === "Upload Docs") {
       return <DocsManager />;
+    }
+
+    if (step.title === "Defaults") {
+      return <TonePoliciesManager />;
     }
 
     if (step.title !== "Connect Gmail") {

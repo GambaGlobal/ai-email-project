@@ -419,6 +419,100 @@ a {
   min-width: 130px;
 }
 
+.tone-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.tone-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f9fbfc;
+  padding: 12px;
+}
+
+.tone-card h3 {
+  margin: 0 0 8px;
+}
+
+.tone-helper {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tone-presets {
+  display: grid;
+  gap: 8px;
+}
+
+.tone-preset-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px 10px;
+}
+
+.tone-sliders {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.tone-slider-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.tone-bullets-grid {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.tone-bullet-section h4 {
+  margin: 0 0 8px;
+}
+
+.tone-bullets {
+  display: grid;
+  gap: 8px;
+}
+
+.tone-bullet-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.policy-list {
+  display: grid;
+  gap: 8px;
+}
+
+.policy-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-snippet {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.preview-snippet p {
+  margin: 6px 0 0;
+}
+
 .onboarding-restart {
   margin-top: 10px;
 }
