@@ -88,7 +88,7 @@ export type JobMeta = {
   threadId?: ProviderThreadId;
   messageId?: ProviderMessageId;
   gmailHistoryId?: string;
-  correlationId: string;
+  correlationId: CorrelationId;
   causationId?: string;
   receivedAt: string;
 };

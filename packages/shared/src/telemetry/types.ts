@@ -1,3 +1,5 @@
+import type { CorrelationId } from "../pipeline/types";
+
 export type TelemetryEventName =
   | "mail.ingestion.plan_built"
   | "mail.thread.fetched"
@@ -13,7 +15,7 @@ export interface TelemetryContext {
   tenantId: string;
   mailboxId: string;
   provider: "gmail" | "outlook" | "other";
-  correlationId?: string;
+  correlationId?: CorrelationId;
   threadId?: string;
   messageId?: string;
   draftId?: string;

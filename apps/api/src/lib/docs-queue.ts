@@ -8,6 +8,14 @@ let queue: Queue<DocsIngestionJob> | null = null;
 
 export type DocsIngestionJob = {
   tenantId: string;
+  mailboxId?: string;
+  provider?: string;
+  stage?: string;
+  correlationId?: string;
+  causationId?: string;
+  threadId?: string;
+  messageId?: string;
+  gmailHistoryId?: string;
   docId: string;
   bucket: string;
   storageKey: string;
@@ -39,10 +47,10 @@ function getQueue(): Queue<DocsIngestionJob> {
   return queue;
 }
 
-export async function enqueueDocIngestion(job: DocsIngestionJob): Promise<void> {
+export async function enqueueDocIngestion(job: DocsIngestionJob): Promise<string | undefined> {
   const ingestionQueue = getQueue();
 
-  await ingestionQueue.add(DOCS_INGESTION_JOB, job, {
+  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, job, {
     removeOnComplete: true,
     removeOnFail: false,
     attempts: 3,
@@ -51,6 +59,8 @@ export async function enqueueDocIngestion(job: DocsIngestionJob): Promise<void> 
       delay: 1000
     }
   });
+
+  return queuedJob.id?.toString();
 }
 
 export { DOCS_INGESTION_JOB, DOCS_INGESTION_QUEUE };

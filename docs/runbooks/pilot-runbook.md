@@ -46,6 +46,25 @@ This runbook defines pilot operations readiness, incident triage, mitigation, re
 - Dedupe hit rate
 - Checkpoint lag
 
+## Log fields (correlation)
+Use the same structured keys in API + worker logs:
+- tenantId
+- mailboxId
+- provider
+- stage
+- queueName
+- jobId
+- correlationId
+- causationId
+- threadId
+- messageId
+- gmailHistoryId
+- event
+- elapsedMs
+- error
+
+`correlationId` ties API receipt and enqueue events to worker processing events through writeback-adjacent stages. `threadId` and `messageId` may be missing at receipt/ingest time and should appear once fetch/classify stages have provider identifiers.
+
 ## Alert thresholds (pilot defaults)
 Defaults below are starting points and should be tuned during pilot:
 - DLQ rate > 0.5% over 15 minutes

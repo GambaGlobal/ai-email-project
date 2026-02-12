@@ -1,9 +1,18 @@
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
+import { asCorrelationId, toLogError, toStructuredLogContext } from "./logging.js";
 
 type DocsIngestionJob = {
   tenantId: string;
+  mailboxId?: string;
+  provider?: string;
+  stage?: string;
+  correlationId?: string;
+  causationId?: string;
+  threadId?: string;
+  messageId?: string;
+  gmailHistoryId?: string;
   docId: string;
   bucket: string;
   storageKey: string;
@@ -48,7 +57,31 @@ async function withTenantClient<T>(tenantId: string, callback: (client: PoolClie
 const ingestionWorker = new Worker<DocsIngestionJob>(
   docsQueueName,
   async (job) => {
+    const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
     const { tenantId, docId } = job.data;
+    const baseLogContext = toStructuredLogContext({
+      tenantId: job.data.tenantId,
+      mailboxId: job.data.mailboxId,
+      provider: job.data.provider ?? "other",
+      stage: job.data.stage ?? "doc_ingestion",
+      queueName: job.queueName,
+      jobId: job.id?.toString(),
+      correlationId: job.data.correlationId ? asCorrelationId(job.data.correlationId) : undefined,
+      causationId: job.data.causationId,
+      threadId: job.data.threadId,
+      messageId: job.data.messageId,
+      gmailHistoryId: job.data.gmailHistoryId
+    });
+
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify({
+        ...baseLogContext,
+        event: "job.start",
+        startedAt: startedAtIso
+      })
+    );
 
     await withTenantClient(tenantId, async (client) => {
       await client.query(
@@ -85,6 +118,16 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
           [tenantId, docId]
         );
       });
+
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          ...baseLogContext,
+          event: "job.done",
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt
+        })
+      );
     } catch (error) {
       await withTenantClient(tenantId, async (client) => {
         await client.query(
@@ -101,6 +144,17 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         );
       });
 
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify({
+          ...baseLogContext,
+          event: "job.error",
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt,
+          error: toLogError(error)
+        })
+      );
+
       throw error;
     }
   },
@@ -112,9 +166,4 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
 ingestionWorker.on("ready", () => {
   // eslint-disable-next-line no-console
   console.log(`worker ready (${workerName}) at ${new Date().toISOString()}`);
-});
-
-ingestionWorker.on("failed", (job, error) => {
-  // eslint-disable-next-line no-console
-  console.error(`doc ingestion job failed ${job?.id ?? "unknown"}`, error);
 });

@@ -4,6 +4,7 @@ import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
 import { deleteDocObject, putDocObject, resolveDocsBucket } from "../lib/s3.js";
 import { enqueueDocIngestion } from "../lib/docs-queue.js";
+import { asCorrelationId, toStructuredLogContext } from "../logging.js";
 
 // Expected API env for docs upload:
 // S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_DOCS (or S3_BUCKET),
@@ -68,6 +69,11 @@ function formatNullableTs(value: unknown): string | null {
   return null;
 }
 
+function resolveMailboxIdFromHeader(headers: Record<string, unknown>): string | undefined {
+  const mailboxHeader = headers["x-mailbox-id"];
+  return typeof mailboxHeader === "string" ? mailboxHeader : undefined;
+}
+
 const docsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v1/docs", async (request, reply) => {
     const tenantId = resolveTenantIdFromHeader(request);
@@ -105,6 +111,34 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     const safeFilename = originalFilename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const bucket = resolveDocsBucket();
     const storageKey = `tenants/${tenantId}/docs/${docId}/${safeFilename}`;
+    const correlationId = asCorrelationId(randomUUID());
+    const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
+    const stage = "doc_ingestion";
+    const queueName = "docs_ingestion";
+    const baseLogContext = toStructuredLogContext({
+      tenantId,
+      mailboxId,
+      provider: "other",
+      stage,
+      queueName,
+      correlationId
+    });
+
+    request.log.info(
+      {
+        ...baseLogContext,
+        event: "notification.received",
+        pubsubDeliveryId:
+          typeof request.headers["x-goog-message-number"] === "string"
+            ? request.headers["x-goog-message-number"]
+            : undefined,
+        pubsubSubscription:
+          typeof request.headers["x-goog-topic"] === "string"
+            ? request.headers["x-goog-topic"]
+            : undefined
+      },
+      "Docs ingestion notification received"
+    );
 
     try {
       await putDocObject({
@@ -168,13 +202,26 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      await enqueueDocIngestion({
+      const jobId = await enqueueDocIngestion({
         tenantId,
+        mailboxId,
+        provider: "other",
+        stage,
+        correlationId,
         docId,
         bucket,
         storageKey,
         category: categoryValue
       });
+
+      request.log.info(
+        {
+          ...baseLogContext,
+          jobId,
+          event: "notification.enqueued"
+        },
+        "Docs ingestion notification enqueued"
+      );
     } catch (error) {
       request.log.error({ error, docId }, "Failed to enqueue docs ingestion");
       return reply.code(500).send({ error: "Unable to enqueue document ingestion" });
@@ -359,13 +406,55 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ error: "Document storage pointer missing" });
       }
 
-      await enqueueDocIngestion({
+      const correlationId = asCorrelationId(randomUUID());
+      const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
+      const stage = "doc_ingestion";
+      const queueName = "docs_ingestion";
+      const baseLogContext = toStructuredLogContext({
         tenantId,
+        mailboxId,
+        provider: "other",
+        stage,
+        queueName,
+        correlationId
+      });
+
+      request.log.info(
+        {
+          ...baseLogContext,
+          event: "notification.received",
+          pubsubDeliveryId:
+            typeof request.headers["x-goog-message-number"] === "string"
+              ? request.headers["x-goog-message-number"]
+              : undefined,
+          pubsubSubscription:
+            typeof request.headers["x-goog-topic"] === "string"
+              ? request.headers["x-goog-topic"]
+              : undefined
+        },
+        "Docs retry notification received"
+      );
+
+      const jobId = await enqueueDocIngestion({
+        tenantId,
+        mailboxId,
+        provider: "other",
+        stage,
+        correlationId,
         docId: String(retried.id),
         bucket: resolveDocsBucket(),
         storageKey,
         category: String(retried.category)
       });
+
+      request.log.info(
+        {
+          ...baseLogContext,
+          jobId,
+          event: "notification.enqueued"
+        },
+        "Docs retry notification enqueued"
+      );
 
       return reply.send(toDocRecord(retried));
     } catch (error) {
