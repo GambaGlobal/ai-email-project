@@ -18,12 +18,27 @@ export {
   DEFAULT_RETRY_POLICY,
   MAIL_JOB_NAMES,
   QUEUE_NAMES,
+  STAGE_TO_QUEUE,
+  queueNameForStage,
   buildMailJobEnvelope
 } from "./queue/types";
 
 export type {
+  BackfillReplayPayload,
+  ClassifyPayload,
+  DraftGeneratePayload,
+  DraftWritebackPayload,
+  HistorySyncPayload,
+  JobEnvelope,
+  JobMeta,
+  JobStage,
+  MailProvider,
   MailJobInput,
-  QueueName
+  NotificationIngestPayload,
+  QueueName,
+  StagePayloadMap,
+  StageToQueue,
+  ThreadFetchPayload
 } from "./queue/types";
 
 export * from "./telemetry";
