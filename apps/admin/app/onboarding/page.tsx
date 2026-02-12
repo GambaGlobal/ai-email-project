@@ -17,13 +17,15 @@ const steps = [
   },
   {
     title: "Upload Docs",
-    description: "This step will upload and categorize knowledge documents for indexing.",
-    placeholder: "Upload area and document list will go here."
+    description:
+      "This step will upload knowledge docs and show indexing status once ingestion is wired.",
+    placeholder: "Inputs will go here."
   },
   {
     title: "Defaults",
-    description: "This step will set tone presets and review default policy behavior.",
-    placeholder: "Tone and policy inputs will go here."
+    description:
+      "This step will configure tone presets and escalation rules once settings are connected.",
+    placeholder: "Inputs will go here."
   },
   {
     title: "Enable Drafts",

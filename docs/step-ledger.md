@@ -54,3 +54,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.1 | 2026-02-12 | SELF | Added Phase 9 Decision Record for operator setup + minimal admin UX. |  |
 | 9.2 | 2026-02-12 | SELF | Scaffolded admin IA routes + page stubs for onboarding, docs, tone/policies, and health (Phase 9). |  |
 | 9.3 | 2026-02-12 | SELF | Added onboarding wizard shell with stepper + local persistence (Phase 9). |  |
+| 9.3.1 | 2026-02-12 | SELF | Aligned onboarding wizard steps to 5-step Phase 9 flow (Profile, Gmail, Docs, Defaults, Enable Drafts). |  |
