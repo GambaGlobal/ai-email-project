@@ -4,7 +4,7 @@
   "packageManager": "pnpm@10.29.2",
   "scripts": {
     "preflight": "node ./scripts/preflight.mjs",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "node ./scripts/typecheck.mjs",
     "typecheck:full": "turbo run typecheck --output-logs=full",
     "typecheck:errors": "turbo run typecheck --output-logs=errors-only",
     "typecheck:new": "turbo run typecheck --output-logs=new-only",

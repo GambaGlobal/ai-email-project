@@ -99,7 +99,7 @@ Use these commands for local reliability checks:
 - Debug verbosity: `pnpm -w typecheck:debug`
 - Shared package only (full logs): `pnpm -w typecheck:filter:shared`
 
-Do not run `pnpm -w typecheck -- --output-logs=...`. Extra flags after `--` are forwarded to package-level `typecheck` scripts (`tsc`) and will fail.
+`pnpm -w typecheck -- ...` is blocked by a guard and fails fast with guidance. Use the wrapper scripts above or run Turbo directly (for example `pnpm -w turbo run typecheck --output-logs=full`).
 
 ## Alert thresholds (pilot defaults)
 Defaults below are starting points and should be tuned during pilot:
