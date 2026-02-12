@@ -7,6 +7,12 @@ import { TonePoliciesManager } from "../components/tone-policies-manager";
 const STORAGE_KEY = "onboarding_step";
 const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
 const GMAIL_LAST_VERIFIED_KEY = "gmail_last_verified";
+const DOCS_STORAGE_KEY = "operator_docs_v1";
+const TONE_POLICIES_STORAGE_KEY = "operator_tone_policies_v1";
+const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
+
+const CONNECT_GMAIL_STEP_INDEX = 1;
+const UPLOAD_DOCS_STEP_INDEX = 2;
 
 type GmailConnectionState =
   | "disconnected"
@@ -14,6 +20,13 @@ type GmailConnectionState =
   | "connected"
   | "error"
   | "reconnect_required";
+
+type PrerequisiteState = {
+  gmailConnected: boolean;
+  hasReadyDoc: boolean;
+  tonePoliciesConfigured: boolean;
+  tonePoliciesUsingDefaults: boolean;
+};
 
 const steps = [
   {
@@ -53,6 +66,13 @@ const validConnectionStates: GmailConnectionState[] = [
   "reconnect_required"
 ];
 
+const validTonePresetIds = [
+  "professional_concise",
+  "warm_welcoming",
+  "friendly_expert_guide",
+  "luxury_concierge"
+] as const;
+
 function clampStepIndex(value: number): number {
   if (Number.isNaN(value)) {
     return 0;
@@ -83,6 +103,62 @@ function formatLastVerified(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+function hasReadyDoc(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return false;
+    }
+
+    return parsed.some((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+
+      return (entry as { status?: unknown }).status === "ready";
+    });
+  } catch {
+    return false;
+  }
+}
+
+function parseTonePoliciesState(value: string | null): {
+  tonePoliciesConfigured: boolean;
+  tonePoliciesUsingDefaults: boolean;
+} {
+  if (!value) {
+    return { tonePoliciesConfigured: true, tonePoliciesUsingDefaults: true };
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") {
+      return { tonePoliciesConfigured: true, tonePoliciesUsingDefaults: true };
+    }
+
+    const tone = (parsed as { tone?: unknown }).tone;
+    const presetId =
+      tone && typeof tone === "object"
+        ? (tone as { preset_id?: unknown }).preset_id
+        : undefined;
+
+    const isValidPreset =
+      typeof presetId === "string" &&
+      validTonePresetIds.includes(presetId as (typeof validTonePresetIds)[number]);
+
+    return {
+      tonePoliciesConfigured: true,
+      tonePoliciesUsingDefaults: !isValidPreset
+    };
+  } catch {
+    return { tonePoliciesConfigured: true, tonePoliciesUsingDefaults: true };
+  }
+}
+
 export default function OnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [gmailConnectionState, setGmailConnectionState] =
@@ -91,6 +167,13 @@ export default function OnboardingPage() {
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [simulateTestFailure, setSimulateTestFailure] = useState(false);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [draftsEnabled, setDraftsEnabled] = useState(false);
+  const [prerequisites, setPrerequisites] = useState<PrerequisiteState>({
+    gmailConnected: false,
+    hasReadyDoc: false,
+    tonePoliciesConfigured: true,
+    tonePoliciesUsingDefaults: true
+  });
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
   const connectTimeoutRef = useRef<number | null>(null);
@@ -108,15 +191,33 @@ export default function OnboardingPage() {
     window.localStorage.setItem(STORAGE_KEY, String(currentStep));
   }, [currentStep]);
 
+  const refreshDraftSignals = () => {
+    const gmailState = window.localStorage.getItem(GMAIL_CONNECTION_STATE_KEY);
+    const docsState = window.localStorage.getItem(DOCS_STORAGE_KEY);
+    const tonePoliciesState = window.localStorage.getItem(TONE_POLICIES_STORAGE_KEY);
+    const draftsState = window.localStorage.getItem(DRAFTS_ENABLED_STORAGE_KEY);
+    const tonePoliciesParsed = parseTonePoliciesState(tonePoliciesState);
+
+    setPrerequisites({
+      gmailConnected: gmailState === "connected",
+      hasReadyDoc: hasReadyDoc(docsState),
+      tonePoliciesConfigured: tonePoliciesParsed.tonePoliciesConfigured,
+      tonePoliciesUsingDefaults: tonePoliciesParsed.tonePoliciesUsingDefaults
+    });
+    setDraftsEnabled(draftsState === "true");
+  };
+
   useEffect(() => {
     const storedConnectionState = window.localStorage.getItem(GMAIL_CONNECTION_STATE_KEY);
     const storedLastVerified = window.localStorage.getItem(GMAIL_LAST_VERIFIED_KEY);
     setGmailConnectionState(parseConnectionState(storedConnectionState));
     setLastVerifiedAt(storedLastVerified);
+    refreshDraftSignals();
   }, []);
 
   useEffect(() => {
     window.localStorage.setItem(GMAIL_CONNECTION_STATE_KEY, gmailConnectionState);
+    refreshDraftSignals();
   }, [gmailConnectionState]);
 
   useEffect(() => {
@@ -127,6 +228,10 @@ export default function OnboardingPage() {
 
     window.localStorage.removeItem(GMAIL_LAST_VERIFIED_KEY);
   }, [lastVerifiedAt]);
+
+  useEffect(() => {
+    refreshDraftSignals();
+  }, [currentStep]);
 
   useEffect(() => {
     return () => {
@@ -153,6 +258,17 @@ export default function OnboardingPage() {
   const restart = () => {
     window.localStorage.removeItem(STORAGE_KEY);
     setCurrentStep(0);
+  };
+
+  const setDraftEnabledState = (enabled: boolean) => {
+    if (enabled) {
+      window.localStorage.setItem(DRAFTS_ENABLED_STORAGE_KEY, "true");
+      setDraftsEnabled(true);
+      return;
+    }
+
+    window.localStorage.setItem(DRAFTS_ENABLED_STORAGE_KEY, "false");
+    setDraftsEnabled(false);
   };
 
   const beginConnectFlow = () => {
@@ -319,6 +435,95 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
 
     if (step.title === "Defaults") {
       return <TonePoliciesManager />;
+    }
+
+    if (step.title === "Enable Drafts") {
+      const canEnable = prerequisites.gmailConnected && prerequisites.hasReadyDoc;
+
+      return (
+        <div className="drafts-gating">
+          <ul className="drafts-checklist">
+            <li>
+              <span
+                className={`drafts-check ${
+                  prerequisites.gmailConnected ? "drafts-check-pass" : "drafts-check-fail"
+                }`}
+              >
+                {prerequisites.gmailConnected ? "Pass" : "Missing"}
+              </span>
+              Gmail connected
+            </li>
+            <li>
+              <span
+                className={`drafts-check ${
+                  prerequisites.hasReadyDoc ? "drafts-check-pass" : "drafts-check-fail"
+                }`}
+              >
+                {prerequisites.hasReadyDoc ? "Pass" : "Missing"}
+              </span>
+              At least one doc indexed/ready
+            </li>
+            <li>
+              <span
+                className={`drafts-check ${
+                  prerequisites.tonePoliciesConfigured ? "drafts-check-pass" : "drafts-check-fail"
+                }`}
+              >
+                {prerequisites.tonePoliciesConfigured ? "Pass" : "Missing"}
+              </span>
+              Tone &amp; policies configured
+              {prerequisites.tonePoliciesUsingDefaults ? (
+                <span className="drafts-inline-note"> (using defaults)</span>
+              ) : null}
+            </li>
+          </ul>
+
+          <p className="onboarding-note">
+            Drafts are created in Gmail as drafts only. We never auto-send.
+          </p>
+
+          {draftsEnabled ? (
+            <div className="drafts-enabled-state">
+              <span className="status-badge status-connected">Drafts enabled</span>
+              <p className="gmail-helper">You can disable this anytime.</p>
+              <button type="button" onClick={() => setDraftEnabledState(false)}>
+                Disable drafts
+              </button>
+            </div>
+          ) : (
+            <div className="drafts-disabled-state">
+              <button type="button" disabled={!canEnable} onClick={() => setDraftEnabledState(true)}>
+                Enable drafts
+              </button>
+              {!canEnable ? (
+                <div className="drafts-next-actions">
+                  <p className="gmail-helper">Complete missing prerequisites first:</p>
+                  {!prerequisites.gmailConnected ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentStep(CONNECT_GMAIL_STEP_INDEX);
+                      }}
+                    >
+                      Go to Connect Gmail
+                    </button>
+                  ) : null}
+                  {!prerequisites.hasReadyDoc ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentStep(UPLOAD_DOCS_STEP_INDEX);
+                      }}
+                    >
+                      Go to Upload Docs
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      );
     }
 
     if (step.title !== "Connect Gmail") {

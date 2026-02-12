@@ -513,6 +513,62 @@ a {
   margin: 6px 0 0;
 }
 
+.drafts-gating {
+  display: grid;
+  gap: 12px;
+}
+
+.drafts-checklist {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.drafts-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.drafts-check {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drafts-check-pass {
+  background: #e3f9e5;
+  border-color: #7bc47f;
+  color: #1f513f;
+}
+
+.drafts-check-fail {
+  background: #ffe3e3;
+  border-color: #f86a6a;
+  color: #911111;
+}
+
+.drafts-inline-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.drafts-enabled-state,
+.drafts-disabled-state {
+  display: grid;
+  gap: 8px;
+}
+
+.drafts-next-actions {
+  display: grid;
+  gap: 8px;
+}
+
 .onboarding-restart {
   margin-top: 10px;
 }
