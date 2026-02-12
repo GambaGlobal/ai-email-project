@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { queryOne, withTenantClient } from "../lib/db.js";
-import { resolveTenantId } from "../lib/tenant.js";
+import { resolveTenantIdFromHeader, resolveTenantIdFromQuery } from "../lib/tenant.js";
 
 type ConnectionStatus = "connected" | "disconnected" | "reconnect_required";
 
@@ -8,9 +8,17 @@ const gmailConnectionRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { tenant_id?: string } }>(
     "/v1/mail/gmail/connection",
     async (request, reply) => {
-      const tenantId = resolveTenantId(request);
+      let tenantId = resolveTenantIdFromHeader(request);
+
+      if (!tenantId && process.env.ALLOW_TENANT_QUERY_FALLBACK === "true") {
+        tenantId = resolveTenantIdFromQuery(request);
+      }
+
       if (!tenantId) {
-        return reply.code(400).send({ error: "Missing or invalid tenant context" });
+        return reply.code(400).send({
+          error:
+            "Missing tenant context. Send x-tenant-id header (or enable ALLOW_TENANT_QUERY_FALLBACK=true)."
+        });
       }
 
       try {

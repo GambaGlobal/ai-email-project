@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { consumeOAuthState, issueOAuthState } from "../lib/oauth-state.js";
-import { resolveTenantId } from "../lib/tenant.js";
+import { resolveTenantIdForOAuthStart } from "../lib/tenant.js";
 import { withTenantClient } from "../lib/db.js";
 import { encryptToken } from "../lib/token-crypto.js";
 
@@ -24,9 +24,11 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { tenant_id?: string; return_to?: string } }>(
     "/v1/auth/gmail/start",
     async (request, reply) => {
-      const tenantId = resolveTenantId(request);
+      const tenantId = resolveTenantIdForOAuthStart(request);
       if (!tenantId) {
-        return reply.code(400).send({ error: "Missing or invalid tenant context" });
+        return reply
+          .code(400)
+          .send({ error: "Missing tenant context. Provide tenant_id or x-tenant-id." });
       }
 
       const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
@@ -42,7 +44,17 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
           ? request.query.return_to
           : "/onboarding";
 
-      const state = issueOAuthState({ tenantId, returnPath });
+      let state: string;
+      try {
+        state = await issueOAuthState({
+          tenantId,
+          provider: "gmail",
+          returnPath
+        });
+      } catch (error) {
+        request.log.error({ error }, "Failed to persist OAuth state in Redis");
+        return reply.code(500).send({ error: "Unable to start Gmail authentication" });
+      }
       const googleOAuthUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
 
       googleOAuthUrl.searchParams.set("client_id", clientId);
@@ -66,7 +78,7 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "Missing OAuth code or state" });
       }
 
-      const stateRecord = consumeOAuthState(state);
+      const stateRecord = await consumeOAuthState("gmail", state);
       if (!stateRecord) {
         return reply.code(400).send({ error: "Invalid or expired OAuth state" });
       }

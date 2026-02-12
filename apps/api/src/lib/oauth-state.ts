@@ -1,44 +1,68 @@
 import { randomBytes } from "node:crypto";
+import { getRedisClient } from "./redis.js";
 
 type OAuthStateRecord = {
   tenantId: string;
+  provider: "gmail";
   returnPath: string;
-  expiresAt: number;
+  createdAt: string;
 };
 
-const STATE_TTL_MS = 10 * 60 * 1000;
-const stateStore = new Map<string, OAuthStateRecord>();
+const STATE_TTL_SECONDS = 10 * 60;
 
-function sweepExpiredStates(now = Date.now()): void {
-  for (const [state, record] of stateStore.entries()) {
-    if (record.expiresAt <= now) {
-      stateStore.delete(state);
-    }
-  }
+function keyFor(provider: "gmail", state: string): string {
+  return `oauth_state:${provider}:${state}`;
 }
 
-export function issueOAuthState(input: { tenantId: string; returnPath: string }): string {
-  sweepExpiredStates();
+export async function issueOAuthState(input: {
+  tenantId: string;
+  provider: "gmail";
+  returnPath: string;
+}): Promise<string> {
+  const redis = await getRedisClient();
 
   const state = randomBytes(24).toString("hex");
-
-  stateStore.set(state, {
+  const record: OAuthStateRecord = {
     tenantId: input.tenantId,
+    provider: input.provider,
     returnPath: input.returnPath,
-    expiresAt: Date.now() + STATE_TTL_MS
+    createdAt: new Date().toISOString()
+  };
+
+  await redis.set(keyFor(input.provider, state), JSON.stringify(record), {
+    EX: STATE_TTL_SECONDS
   });
 
   return state;
 }
 
-export function consumeOAuthState(state: string): OAuthStateRecord | null {
-  sweepExpiredStates();
+export async function consumeOAuthState(
+  provider: "gmail",
+  state: string
+): Promise<OAuthStateRecord | null> {
+  const redis = await getRedisClient();
+  const key = keyFor(provider, state);
+  const value = await redis.getDel(key);
 
-  const record = stateStore.get(state);
-  if (!record) {
+  if (!value) {
     return null;
   }
 
-  stateStore.delete(state);
-  return record;
+  try {
+    const parsed = JSON.parse(value) as Partial<OAuthStateRecord>;
+
+    if (
+      parsed.provider === provider &&
+      typeof parsed.tenantId === "string" &&
+      parsed.tenantId.length > 0 &&
+      typeof parsed.returnPath === "string" &&
+      typeof parsed.createdAt === "string"
+    ) {
+      return parsed as OAuthStateRecord;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }

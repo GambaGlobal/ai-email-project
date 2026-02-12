@@ -60,3 +60,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 9.8 | 2026-02-12 | SELF | Added mocked tone + escalation policies UI with local persistence and preview. |  |
 | 9.10 | 2026-02-12 | SELF | Added Enable Drafts gating step based on Gmail connection + indexed docs, with local persistence. |  |
 | 9.5 | 2026-02-12 | SELF | Implemented real Gmail OAuth connect endpoints + persisted tenant connection state (admin wired behind env). |  |
+| 9.5.1 | 2026-02-12 | SELF | Hardened Gmail OAuth state storage with Redis TTL + one-time consume and tightened tenant resolution rules. |  |
