@@ -4,6 +4,12 @@
   "packageManager": "pnpm@10.29.2",
   "scripts": {
     "typecheck": "turbo run typecheck",
+    "typecheck:full": "turbo run typecheck --output-logs=full",
+    "typecheck:errors": "turbo run typecheck --output-logs=errors-only",
+    "typecheck:new": "turbo run typecheck --output-logs=new-only",
+    "typecheck:hash": "turbo run typecheck --output-logs=hash-only",
+    "typecheck:debug": "turbo run typecheck -vv",
+    "typecheck:filter:shared": "turbo run typecheck --filter=@ai-email/shared --output-logs=full",
     "repo:check": "pnpm -w typecheck",
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",

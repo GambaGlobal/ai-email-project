@@ -72,6 +72,19 @@ Use the same structured keys in API + worker logs:
 4. Confirm worker logs include `job.start` and `job.done` with that same `correlationId`.
 5. If `correlationId` does not match across API and worker for the same job, stop and fix enqueue context propagation before pilot use.
 
+## Typecheck commands
+Use these commands for local reliability checks:
+- Canonical gate: `pnpm -w repo:check`
+- Direct turbo equivalent: `pnpm -w turbo run typecheck`
+- Full logs: `pnpm -w typecheck:full`
+- Errors only: `pnpm -w typecheck:errors`
+- New logs only: `pnpm -w typecheck:new`
+- Hash-only logs: `pnpm -w typecheck:hash`
+- Debug verbosity: `pnpm -w typecheck:debug`
+- Shared package only (full logs): `pnpm -w typecheck:filter:shared`
+
+Do not run `pnpm -w typecheck -- --output-logs=...`. Extra flags after `--` are forwarded to package-level `typecheck` scripts (`tsc`) and will fail.
+
 ## Alert thresholds (pilot defaults)
 Defaults below are starting points and should be tuned during pilot:
 - DLQ rate > 0.5% over 15 minutes
