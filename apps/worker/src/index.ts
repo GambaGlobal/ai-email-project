@@ -1,14 +1,15 @@
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
-import { asCorrelationId, toLogError, toStructuredLogContext } from "./logging.js";
+import type { CorrelationId } from "@ai-email/shared";
+import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 
 type DocsIngestionJob = {
   tenantId: string;
   mailboxId?: string;
   provider?: string;
   stage?: string;
-  correlationId?: string;
+  correlationId: CorrelationId;
   causationId?: string;
   threadId?: string;
   messageId?: string;
@@ -67,7 +68,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       stage: job.data.stage ?? "doc_ingestion",
       queueName: job.queueName,
       jobId: job.id?.toString(),
-      correlationId: job.data.correlationId ? asCorrelationId(job.data.correlationId) : undefined,
+      correlationId: job.data.correlationId,
       causationId: job.data.causationId,
       threadId: job.data.threadId,
       messageId: job.data.messageId,
@@ -76,11 +77,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
 
     // eslint-disable-next-line no-console
     console.log(
-      JSON.stringify({
-        ...baseLogContext,
-        event: "job.start",
-        startedAt: startedAtIso
-      })
+      JSON.stringify(toStructuredLogEvent(baseLogContext, "job.start", { startedAt: startedAtIso }))
     );
 
     await withTenantClient(tenantId, async (client) => {
@@ -121,12 +118,12 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
 
       // eslint-disable-next-line no-console
       console.log(
-        JSON.stringify({
-          ...baseLogContext,
-          event: "job.done",
-          startedAt: startedAtIso,
-          elapsedMs: Date.now() - startedAt
-        })
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt
+          })
+        )
       );
     } catch (error) {
       await withTenantClient(tenantId, async (client) => {
@@ -146,13 +143,13 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
 
       // eslint-disable-next-line no-console
       console.error(
-        JSON.stringify({
-          ...baseLogContext,
-          event: "job.error",
-          startedAt: startedAtIso,
-          elapsedMs: Date.now() - startedAt,
-          error: toLogError(error)
-        })
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.error", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            error: toLogError(error)
+          })
+        )
       );
 
       throw error;

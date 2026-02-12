@@ -1,4 +1,4 @@
-type CorrelationId = string & { readonly __brand: "CorrelationId" };
+import type { CorrelationId } from "@ai-email/shared";
 
 export type StructuredLogContext = {
   tenantId?: string;
@@ -14,9 +14,13 @@ export type StructuredLogContext = {
   gmailHistoryId?: string;
 };
 
-export function asCorrelationId(value: string): CorrelationId {
-  return value as CorrelationId;
-}
+export type StructuredLogEvent = StructuredLogContext & {
+  event: string;
+  elapsedMs?: number;
+  pubsubDeliveryId?: string;
+  pubsubMessageId?: string;
+  pubsubSubscription?: string;
+};
 
 export function toStructuredLogContext(context: StructuredLogContext): StructuredLogContext {
   return {
@@ -31,5 +35,46 @@ export function toStructuredLogContext(context: StructuredLogContext): Structure
     threadId: context.threadId,
     messageId: context.messageId,
     gmailHistoryId: context.gmailHistoryId
+  };
+}
+
+export function toStructuredLogEvent(
+  context: StructuredLogContext,
+  event: string,
+  extra?: {
+    elapsedMs?: number;
+    pubsubDeliveryId?: string;
+    pubsubMessageId?: string;
+    pubsubSubscription?: string;
+  }
+): StructuredLogEvent {
+  return {
+    ...toStructuredLogContext(context),
+    event,
+    elapsedMs: extra?.elapsedMs,
+    pubsubDeliveryId: extra?.pubsubDeliveryId,
+    pubsubMessageId: extra?.pubsubMessageId,
+    pubsubSubscription: extra?.pubsubSubscription
+  };
+}
+
+export function toPubsubIdentifiers(headers: Record<string, unknown>): {
+  pubsubDeliveryId?: string;
+  pubsubMessageId?: string;
+  pubsubSubscription?: string;
+} {
+  return {
+    pubsubDeliveryId:
+      typeof headers["x-goog-delivery-attempt"] === "string"
+        ? headers["x-goog-delivery-attempt"]
+        : undefined,
+    pubsubMessageId:
+      typeof headers["x-goog-message-number"] === "string"
+        ? headers["x-goog-message-number"]
+        : undefined,
+    pubsubSubscription:
+      typeof headers["x-goog-subscription-name"] === "string"
+        ? headers["x-goog-subscription-name"]
+        : undefined
   };
 }

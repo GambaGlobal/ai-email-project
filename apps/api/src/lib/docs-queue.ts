@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { asCorrelationId, newCorrelationId, type CorrelationId } from "@ai-email/shared";
 
 const DOCS_INGESTION_QUEUE = "docs_ingestion";
 const DOCS_INGESTION_JOB = "docs.ingest";
@@ -11,7 +12,7 @@ export type DocsIngestionJob = {
   mailboxId?: string;
   provider?: string;
   stage?: string;
-  correlationId?: string;
+  correlationId: CorrelationId;
   causationId?: string;
   threadId?: string;
   messageId?: string;
@@ -20,6 +21,10 @@ export type DocsIngestionJob = {
   bucket: string;
   storageKey: string;
   category: string;
+};
+
+export type DocsIngestionJobInput = Omit<DocsIngestionJob, "correlationId"> & {
+  correlationId?: CorrelationId | string;
 };
 
 function createRedisConnection(): IORedis {
@@ -47,10 +52,19 @@ function getQueue(): Queue<DocsIngestionJob> {
   return queue;
 }
 
-export async function enqueueDocIngestion(job: DocsIngestionJob): Promise<string | undefined> {
+export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
+  jobId: string | undefined;
+  correlationId: CorrelationId;
+}> {
   const ingestionQueue = getQueue();
+  const correlationId =
+    typeof job.correlationId === "string" ? asCorrelationId(job.correlationId) : newCorrelationId();
+  const jobWithCorrelation: DocsIngestionJob = {
+    ...job,
+    correlationId
+  };
 
-  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, job, {
+  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation, {
     removeOnComplete: true,
     removeOnFail: false,
     attempts: 3,
@@ -60,7 +74,10 @@ export async function enqueueDocIngestion(job: DocsIngestionJob): Promise<string
     }
   });
 
-  return queuedJob.id?.toString();
+  return {
+    jobId: queuedJob.id?.toString(),
+    correlationId
+  };
 }
 
 export { DOCS_INGESTION_JOB, DOCS_INGESTION_QUEUE };

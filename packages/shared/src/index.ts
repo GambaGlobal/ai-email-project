@@ -14,6 +14,8 @@ export type {
   RunKey
 } from "./pipeline/types";
 
+export { asCorrelationId, newCorrelationId } from "./pipeline/ids";
+
 export {
   DEFAULT_RETRY_POLICY,
   MAIL_JOB_NAMES,

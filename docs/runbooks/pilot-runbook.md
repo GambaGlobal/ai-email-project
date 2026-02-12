@@ -65,6 +65,13 @@ Use the same structured keys in API + worker logs:
 
 `correlationId` ties API receipt and enqueue events to worker processing events through writeback-adjacent stages. `threadId` and `messageId` may be missing at receipt/ingest time and should appear once fetch/classify stages have provider identifiers.
 
+## Local smoke test (correlation/logs)
+1. Start API and worker in separate terminals.
+2. Trigger a single ingestion enqueue through the local docs ingestion route.
+3. Confirm API logs include `notification.received` and `notification.enqueued` with the same `correlationId`.
+4. Confirm worker logs include `job.start` and `job.done` with that same `correlationId`.
+5. If `correlationId` does not match across API and worker for the same job, stop and fix enqueue context propagation before pilot use.
+
 ## Alert thresholds (pilot defaults)
 Defaults below are starting points and should be tuned during pilot:
 - DLQ rate > 0.5% over 15 minutes

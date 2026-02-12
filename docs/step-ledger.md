@@ -69,3 +69,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.2 | 2026-02-12 | SELF | Defined queue taxonomy + typed job contracts in shared package. |  |
 | 10.2.1 | 2026-02-12 | SELF | Tightened queue contracts: ingest cursor union + provider ID meta typing. |  |
 | 10.7 | 2026-02-12 | SELF | Added structured logging baseline + correlationId alignment across shared/API/worker. |  |
+| 10.7.1 | 2026-02-12 | SELF | Hardened correlationId + safe structured logging (helpers + enqueue defaults). |  |

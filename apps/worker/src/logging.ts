@@ -1,4 +1,4 @@
-type CorrelationId = string & { readonly __brand: "CorrelationId" };
+import type { CorrelationId } from "@ai-email/shared";
 
 export type StructuredLogContext = {
   tenantId?: string;
@@ -14,9 +14,15 @@ export type StructuredLogContext = {
   gmailHistoryId?: string;
 };
 
-export function asCorrelationId(value: string): CorrelationId {
-  return value as CorrelationId;
-}
+export type StructuredLogEvent = StructuredLogContext & {
+  event: string;
+  elapsedMs?: number;
+  startedAt?: string;
+  error?: {
+    message: string;
+    stack?: string;
+  };
+};
 
 export function toStructuredLogContext(context: StructuredLogContext): StructuredLogContext {
   return {
@@ -31,6 +37,27 @@ export function toStructuredLogContext(context: StructuredLogContext): Structure
     threadId: context.threadId,
     messageId: context.messageId,
     gmailHistoryId: context.gmailHistoryId
+  };
+}
+
+export function toStructuredLogEvent(
+  context: StructuredLogContext,
+  event: string,
+  extra?: {
+    elapsedMs?: number;
+    startedAt?: string;
+    error?: {
+      message: string;
+      stack?: string;
+    };
+  }
+): StructuredLogEvent {
+  return {
+    ...toStructuredLogContext(context),
+    event,
+    elapsedMs: extra?.elapsedMs,
+    startedAt: extra?.startedAt,
+    error: extra?.error
   };
 }
 

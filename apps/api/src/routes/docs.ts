@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
+import { newCorrelationId } from "@ai-email/shared";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
 import { deleteDocObject, putDocObject, resolveDocsBucket } from "../lib/s3.js";
 import { enqueueDocIngestion } from "../lib/docs-queue.js";
-import { asCorrelationId, toStructuredLogContext } from "../logging.js";
+import { toPubsubIdentifiers, toStructuredLogContext, toStructuredLogEvent } from "../logging.js";
 
 // Expected API env for docs upload:
 // S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_DOCS (or S3_BUCKET),
@@ -111,7 +112,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     const safeFilename = originalFilename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const bucket = resolveDocsBucket();
     const storageKey = `tenants/${tenantId}/docs/${docId}/${safeFilename}`;
-    const correlationId = asCorrelationId(randomUUID());
+    const correlationId = newCorrelationId();
     const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
     const stage = "doc_ingestion";
     const queueName = "docs_ingestion";
@@ -125,18 +126,9 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     request.log.info(
-      {
-        ...baseLogContext,
-        event: "notification.received",
-        pubsubDeliveryId:
-          typeof request.headers["x-goog-message-number"] === "string"
-            ? request.headers["x-goog-message-number"]
-            : undefined,
-        pubsubSubscription:
-          typeof request.headers["x-goog-topic"] === "string"
-            ? request.headers["x-goog-topic"]
-            : undefined
-      },
+      toStructuredLogEvent(baseLogContext, "notification.received", {
+        ...toPubsubIdentifiers(request.headers as Record<string, unknown>)
+      }),
       "Docs ingestion notification received"
     );
 
@@ -202,7 +194,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const jobId = await enqueueDocIngestion({
+      const queued = await enqueueDocIngestion({
         tenantId,
         mailboxId,
         provider: "other",
@@ -215,11 +207,14 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       request.log.info(
-        {
-          ...baseLogContext,
-          jobId,
-          event: "notification.enqueued"
-        },
+        toStructuredLogEvent(
+          {
+            ...baseLogContext,
+            jobId: queued.jobId,
+            correlationId: queued.correlationId
+          },
+          "notification.enqueued"
+        ),
         "Docs ingestion notification enqueued"
       );
     } catch (error) {
@@ -406,7 +401,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ error: "Document storage pointer missing" });
       }
 
-      const correlationId = asCorrelationId(randomUUID());
+      const correlationId = newCorrelationId();
       const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
       const stage = "doc_ingestion";
       const queueName = "docs_ingestion";
@@ -420,22 +415,13 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       request.log.info(
-        {
-          ...baseLogContext,
-          event: "notification.received",
-          pubsubDeliveryId:
-            typeof request.headers["x-goog-message-number"] === "string"
-              ? request.headers["x-goog-message-number"]
-              : undefined,
-          pubsubSubscription:
-            typeof request.headers["x-goog-topic"] === "string"
-              ? request.headers["x-goog-topic"]
-              : undefined
-        },
+        toStructuredLogEvent(baseLogContext, "notification.received", {
+          ...toPubsubIdentifiers(request.headers as Record<string, unknown>)
+        }),
         "Docs retry notification received"
       );
 
-      const jobId = await enqueueDocIngestion({
+      const queued = await enqueueDocIngestion({
         tenantId,
         mailboxId,
         provider: "other",
@@ -448,11 +434,14 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       request.log.info(
-        {
-          ...baseLogContext,
-          jobId,
-          event: "notification.enqueued"
-        },
+        toStructuredLogEvent(
+          {
+            ...baseLogContext,
+            jobId: queued.jobId,
+            correlationId: queued.correlationId
+          },
+          "notification.enqueued"
+        ),
         "Docs retry notification enqueued"
       );
 
