@@ -1,5 +1,21 @@
 # Pilot Runbook: Reliability & Observability (Phase 10)
 
+## Preflight (required)
+Run this preflight before using the rest of this runbook, especially on a fresh machine or freshly cloned repo.
+
+Version checks:
+- Node.js: use the repo's `.nvmrc` if present; otherwise use a current LTS release.
+- pnpm: `10.29.2` (pinned in `package.json` `packageManager`).
+
+Fresh setup:
+1. `pnpm -v`
+2. `node -v`
+3. `pnpm -w install`
+4. `pnpm -w preflight`
+5. `pnpm -w repo:check`
+
+If you see `Local package.json exists, but node_modules missing`, dependencies are not installed for that workspace yet. Run `pnpm -w install` and then rerun `pnpm -w preflight`.
+
 ## Purpose & scope
 This runbook defines pilot operations readiness, incident triage, mitigation, recovery, and evidence capture for the Gmail-first draft pipeline. It is designed for safe operations where no customer email is auto-sent in v1.
 
