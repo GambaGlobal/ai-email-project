@@ -10,6 +10,11 @@ const GMAIL_LAST_VERIFIED_KEY = "gmail_last_verified";
 const DOCS_STORAGE_KEY = "operator_docs_v1";
 const TONE_POLICIES_STORAGE_KEY = "operator_tone_policies_v1";
 const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
+// Optional admin env wiring for real OAuth connect:
+// NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+const API_TENANT_ID =
+  process.env.NEXT_PUBLIC_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
 const UPLOAD_DOCS_STEP_INDEX = 2;
@@ -167,6 +172,7 @@ export default function OnboardingPage() {
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [simulateTestFailure, setSimulateTestFailure] = useState(false);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [isRefreshingRealStatus, setIsRefreshingRealStatus] = useState(false);
   const [draftsEnabled, setDraftsEnabled] = useState(false);
   const [prerequisites, setPrerequisites] = useState<PrerequisiteState>({
     gmailConnected: false,
@@ -334,6 +340,66 @@ export default function OnboardingPage() {
     }, 900);
   };
 
+  const refreshRealConnectionStatus = async () => {
+    if (!API_BASE_URL) {
+      return;
+    }
+
+    setIsRefreshingRealStatus(true);
+    setShowErrorDetails(false);
+
+    try {
+      const statusUrl = new URL("/v1/mail/gmail/connection", API_BASE_URL);
+      statusUrl.searchParams.set("tenant_id", API_TENANT_ID);
+
+      const response = await fetch(statusUrl.toString(), {
+        method: "GET"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Status request failed with ${response.status}`);
+      }
+
+      const payload = (await response.json()) as {
+        status?: "connected" | "disconnected" | "reconnect_required";
+        last_verified_at?: string | null;
+      };
+
+      const normalizedState =
+        payload.status === "connected" ||
+        payload.status === "reconnect_required" ||
+        payload.status === "disconnected"
+          ? payload.status
+          : "disconnected";
+
+      setGmailConnectionState(normalizedState);
+
+      if (payload.last_verified_at) {
+        setLastVerifiedAt(payload.last_verified_at);
+      } else {
+        setLastVerifiedAt(null);
+      }
+    } catch (error) {
+      setGmailConnectionState("error");
+      setShowErrorDetails(true);
+      // eslint-disable-next-line no-console
+      console.error(error);
+    } finally {
+      setIsRefreshingRealStatus(false);
+    }
+  };
+
+  const startRealConnectFlow = () => {
+    if (!API_BASE_URL) {
+      return;
+    }
+
+    const startUrl = new URL("/v1/auth/gmail/start", API_BASE_URL);
+    startUrl.searchParams.set("tenant_id", API_TENANT_ID);
+    startUrl.searchParams.set("return_to", "/onboarding");
+    window.location.assign(startUrl.toString());
+  };
+
   const renderConnectPanel = () => {
     const lastVerifiedLabel = formatLastVerified(lastVerifiedAt);
 
@@ -360,12 +426,24 @@ export default function OnboardingPage() {
             <strong>Last verified:</strong> {lastVerifiedLabel}
           </p>
           <div className="onboarding-actions">
-            <button type="button" onClick={testConnection} disabled={isTestingConnection}>
-              {isTestingConnection ? "Testing..." : "Test connection"}
-            </button>
-            <button type="button" onClick={disconnectGmail}>
-              Disconnect
-            </button>
+            {API_BASE_URL ? (
+              <button
+                type="button"
+                onClick={refreshRealConnectionStatus}
+                disabled={isRefreshingRealStatus}
+              >
+                {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
+              </button>
+            ) : (
+              <>
+                <button type="button" onClick={testConnection} disabled={isTestingConnection}>
+                  {isTestingConnection ? "Testing..." : "Test connection"}
+                </button>
+                <button type="button" onClick={disconnectGmail}>
+                  Disconnect
+                </button>
+              </>
+            )}
           </div>
         </div>
       );
@@ -378,9 +456,24 @@ export default function OnboardingPage() {
           <p className="gmail-helper">
             Access expired. Reconnect Gmail to continue generating drafts.
           </p>
-          <button type="button" onClick={beginConnectFlow}>
-            Reconnect Gmail
-          </button>
+          {API_BASE_URL ? (
+            <div className="onboarding-actions">
+              <button type="button" onClick={startRealConnectFlow}>
+                Reconnect Gmail (real)
+              </button>
+              <button
+                type="button"
+                onClick={refreshRealConnectionStatus}
+                disabled={isRefreshingRealStatus}
+              >
+                {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
+              </button>
+            </div>
+          ) : (
+            <button type="button" onClick={beginConnectFlow}>
+              Reconnect Gmail
+            </button>
+          )}
         </div>
       );
     }
@@ -393,9 +486,15 @@ export default function OnboardingPage() {
             We could not verify Gmail access. Please try again in a moment.
           </p>
           <div className="onboarding-actions">
-            <button type="button" onClick={beginConnectFlow}>
-              Try again
-            </button>
+            {API_BASE_URL ? (
+              <button type="button" onClick={startRealConnectFlow}>
+                Try again (real)
+              </button>
+            ) : (
+              <button type="button" onClick={beginConnectFlow}>
+                Try again
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -421,9 +520,24 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
           Connect Gmail so we can read thread context and create drafts in Gmail. We never
           auto-send.
         </p>
-        <button type="button" onClick={beginConnectFlow}>
-          Connect Gmail
-        </button>
+        {API_BASE_URL ? (
+          <div className="onboarding-actions">
+            <button type="button" onClick={startRealConnectFlow}>
+              Connect Gmail (real)
+            </button>
+            <button
+              type="button"
+              onClick={refreshRealConnectionStatus}
+              disabled={isRefreshingRealStatus}
+            >
+              {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={beginConnectFlow}>
+            Connect Gmail
+          </button>
+        )}
       </div>
     );
   };
@@ -533,30 +647,32 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
     return (
       <>
         {renderConnectPanel()}
-        <details className="onboarding-dev-controls">
-          <summary>Developer controls (UX mock only)</summary>
-          <div className="onboarding-dev-actions">
-            <button type="button" onClick={() => setMockConnectionState("reconnect_required")}>
-              Simulate reconnect required
-            </button>
-            <button type="button" onClick={() => setMockConnectionState("error")}>
-              Simulate error
-            </button>
-            <button type="button" onClick={() => setMockConnectionState("connected")}>
-              Simulate success
-            </button>
-            <label className="simulate-toggle">
-              <input
-                type="checkbox"
-                checked={simulateTestFailure}
-                onChange={(event) => {
-                  setSimulateTestFailure(event.target.checked);
-                }}
-              />
-              Simulate failure on next test
-            </label>
-          </div>
-        </details>
+        {!API_BASE_URL ? (
+          <details className="onboarding-dev-controls">
+            <summary>Developer controls (UX mock only)</summary>
+            <div className="onboarding-dev-actions">
+              <button type="button" onClick={() => setMockConnectionState("reconnect_required")}>
+                Simulate reconnect required
+              </button>
+              <button type="button" onClick={() => setMockConnectionState("error")}>
+                Simulate error
+              </button>
+              <button type="button" onClick={() => setMockConnectionState("connected")}>
+                Simulate success
+              </button>
+              <label className="simulate-toggle">
+                <input
+                  type="checkbox"
+                  checked={simulateTestFailure}
+                  onChange={(event) => {
+                    setSimulateTestFailure(event.target.checked);
+                  }}
+                />
+                Simulate failure on next test
+              </label>
+            </div>
+          </details>
+        ) : null}
         <p className="onboarding-note">
           Drafts are created in Gmail as drafts only. We never auto-send.
         </p>
