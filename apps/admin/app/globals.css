@@ -291,6 +291,134 @@ a {
   color: var(--muted);
 }
 
+.docs-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.docs-helper {
+  margin: 0;
+  color: var(--muted);
+}
+
+.docs-dropzone {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #f9fbfc;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.docs-dropzone p {
+  margin: 0;
+}
+
+.docs-dropzone-active {
+  border-color: #486581;
+  background: #edf2f7;
+}
+
+.docs-upload-button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.docs-upload-input {
+  display: none;
+}
+
+.docs-empty-state {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f9fbfc;
+  color: var(--muted);
+  padding: 12px;
+}
+
+.docs-table-wrap {
+  overflow-x: auto;
+}
+
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.docs-table th,
+.docs-table td {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.docs-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.docs-filename {
+  font-weight: 600;
+}
+
+.docs-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.doc-status-queued {
+  background: #e6f0ff;
+  border-color: #84a9ff;
+  color: #1f4f8f;
+}
+
+.doc-status-indexing {
+  background: #fff4d1;
+  border-color: #f7c948;
+  color: #8d2b0b;
+}
+
+.doc-status-ready {
+  background: #e3f9e5;
+  border-color: #7bc47f;
+  color: #1f513f;
+}
+
+.doc-status-failed {
+  background: #ffe3e3;
+  border-color: #f86a6a;
+  color: #911111;
+}
+
+.docs-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.docs-table select {
+  min-width: 130px;
+}
+
 .onboarding-restart {
   margin-top: 10px;
 }
