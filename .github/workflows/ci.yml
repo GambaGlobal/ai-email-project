@@ -13,8 +13,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  typecheck:
+  ci:
     runs-on: ubuntu-latest
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      DOCS_STORAGE: local
+      DOCS_LOCAL_DIR: /tmp/ai-email-docs
+      TENANT_AUTOSEED: "1"
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_email_dev
+      AI_EMAIL_API_LOG: /tmp/ai-email-api.log
+      AI_EMAIL_WORKER_LOG: /tmp/ai-email-worker.log
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16-bookworm
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_email_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ai_email_dev"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,8 +63,65 @@ jobs:
       - name: Install dependencies
         run: pnpm -w install --frozen-lockfile
 
-      - name: Preflight
-        run: pnpm -w preflight
-
       - name: Repo check
         run: pnpm -w repo:check
+
+      - name: Run DB migrations
+        run: pnpm -w db:migrate
+
+      - name: Start API and worker
+        run: |
+          set -euo pipefail
+          PIDS_FILE="/tmp/ai-email-dev-pids"
+          nohup bash -lc 'pnpm -w --filter @ai-email/api dev 2>&1 | tee /tmp/ai-email-api.log' >/dev/null 2>&1 &
+          API_PID=$!
+          nohup bash -lc 'pnpm -w --filter @ai-email/worker dev 2>&1 | tee /tmp/ai-email-worker.log' >/dev/null 2>&1 &
+          WORKER_PID=$!
+          printf "API_PID=%s\nWORKER_PID=%s\n" "$API_PID" "$WORKER_PID" > "$PIDS_FILE"
+
+      - name: Wait for API health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:3001/healthz" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "api healthz not ready after 60s"
+          exit 1
+
+      - name: Smoke correlation
+        env:
+          SMOKE_LOG_TIMEOUT_MS: "20000"
+        run: pnpm -w smoke:correlation
+
+      - name: Cleanup background processes
+        if: always()
+        run: |
+          set +e
+          PIDS_FILE="/tmp/ai-email-dev-pids"
+          if [ -f "$PIDS_FILE" ]; then
+            . "$PIDS_FILE"
+            for pid in "$API_PID" "$WORKER_PID"; do
+              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                kill "$pid" 2>/dev/null || true
+              fi
+            done
+            sleep 2
+            for pid in "$API_PID" "$WORKER_PID"; do
+              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+              fi
+            done
+          fi
+
+      - name: Upload smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-logs
+          path: |
+            /tmp/ai-email-api.log
+            /tmp/ai-email-worker.log
+          if-no-files-found: warn

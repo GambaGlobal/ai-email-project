@@ -133,6 +133,16 @@ Useful overrides:
 - `SMOKE_LOG_TIMEOUT_MS` to extend/reduce smoke log polling timeout.
 - `SKIP_DB_SETUP=1` to skip DB bootstrap when your DB is already ready.
 
+## CI
+GitHub Actions workflow `CI` runs:
+1. `pnpm -w repo:check`
+2. `pnpm -w db:migrate` against Docker service Postgres 16 + pgvector
+3. API + worker startup and `pnpm -w smoke:correlation` deterministic verification
+
+On failures, CI uploads log artifacts named `ci-smoke-logs` containing:
+- `/tmp/ai-email-api.log`
+- `/tmp/ai-email-worker.log`
+
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
 1. `brew install redis`
