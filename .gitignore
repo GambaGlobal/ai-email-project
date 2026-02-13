@@ -24,3 +24,5 @@ coverage/
 .DS_Store
 .tmp/
 .tmp/
+.pnpm-store/
+.pnpm-store

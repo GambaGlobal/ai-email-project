@@ -14,6 +14,11 @@ Fresh setup:
 4. `pnpm -w preflight`
 5. `pnpm -w repo:check`
 
+Recommended one-time pnpm store configuration:
+1. `pnpm config set store-dir ~/.pnpm-store`
+2. `pnpm config get store-dir`
+This prevents pnpm from creating `.pnpm-store/` in the repo.
+
 If you see `Local package.json exists, but node_modules missing`, dependencies are not installed for that workspace yet. Run `pnpm -w install` and then rerun `pnpm -w preflight`.
 
 ## Purpose & scope
@@ -146,7 +151,7 @@ On failures, go to GitHub Actions run details and open Artifacts:
 In GitHub:
 1. `Settings` -> `Branches` -> `Branch protection rules` -> `Add rule` for `main`.
 2. Enable `Require status checks to pass before merging`.
-3. Select the CI check shown by Actions for workflow `CI`.
+3. Select required status check `CI / smoke-gate`.
 4. Enable `Require branches to be up to date before merging` (recommended).
 5. Optionally enable `Require a pull request before merging` and PR reviews.
 
