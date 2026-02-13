@@ -207,6 +207,18 @@ What the output means:
 - `queue.active` lines are active samples ordered oldest-first (`ageMs` helps identify stuck work).
 - `queue.failed` lines are recent failed samples (bounded by `SINCE_MINUTES`, default `60`) with truncated reasons.
 
+### Pause / Resume queue
+Use pause/resume to hold or release backlog processing without dropping jobs. This complements kill switches: pause holds processing, while kill switches block side effects.
+
+Commands:
+- Dry-run pause: `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:pause`
+- Confirm pause: `REDIS_URL="redis://127.0.0.1:6379" QUEUE_CONTROL_CONFIRM=1 pnpm -w queue:pause`
+- Read current status: `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:is-paused`
+- Confirm resume: `REDIS_URL="redis://127.0.0.1:6379" QUEUE_CONTROL_CONFIRM=1 pnpm -w queue:resume`
+
+Queue override:
+- Set `QUEUE_NAME` to operate on a queue other than `docs_ingestion`.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`
