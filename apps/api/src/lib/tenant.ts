@@ -7,6 +7,18 @@ function isValidTenantId(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
+function resolveTenantHeaderValue(headers: FastifyRequest["headers"]): string | null {
+  const rawHeaderValue = headers["x-tenant-id"];
+  const normalizedValue = Array.isArray(rawHeaderValue) ? rawHeaderValue[0] : rawHeaderValue;
+
+  if (typeof normalizedValue !== "string") {
+    return null;
+  }
+
+  const tenantId = normalizedValue.trim();
+  return tenantId.length > 0 ? tenantId : null;
+}
+
 export function resolveTenantIdForOAuthStart(
   request: FastifyRequest<{ Querystring?: { tenant_id?: string } }>
 ): string | null {
@@ -26,13 +38,18 @@ export function resolveTenantIdForOAuthStart(
 }
 
 export function resolveTenantIdFromHeader(request: FastifyRequest): string | null {
-  const headerTenantId = request.headers["x-tenant-id"];
+  const tenantId = resolveTenantHeaderValue(request.headers);
 
-  if (isValidTenantId(headerTenantId)) {
-    return headerTenantId;
+  if (!tenantId && process.env.TENANT_DEBUG === "1") {
+    // Debug-only tenant header introspection for local troubleshooting.
+    // eslint-disable-next-line no-console
+    console.warn("TENANT_DEBUG missing x-tenant-id", {
+      headerKeys: Object.keys(request.headers),
+      tenantHeader: request.headers["x-tenant-id"]
+    });
   }
 
-  return null;
+  return tenantId;
 }
 
 export function resolveTenantIdFromQuery(

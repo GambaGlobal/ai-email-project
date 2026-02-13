@@ -76,4 +76,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.0.4 | 2026-02-12 | SELF | Gated PRs/main pushes with CI running install (frozen), preflight, and repo:check. |  |
 | 10.0.5 | 2026-02-12 | SELF | Guarded typecheck entrypoint against arg forwarding and documented fail-fast usage. |  |
 | 10.7.2 | 2026-02-12 | SELF | Added correlation E2E smoke harness and deterministic runbook verification steps. | Checks: `pnpm -w preflight`; `pnpm -w repo:check`; `pnpm -w typecheck:full`. |
-| 10.7.3 | 2026-02-13 | SELF | Fixed smoke correlation headers/logging and documented Redis Homebrew setup for macOS without Docker. | Checks: `pnpm -w repo:check`; `pnpm -w typecheck:full`. |
+| 10.7.3 | 2026-02-13 | SELF | Fixed API tenant header resolution for `x-tenant-id` by using Fastify lowercase header lookup with normalized string/array handling. | Checks: `pnpm -w repo:check`; `pnpm -w smoke:correlation`. |
