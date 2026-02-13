@@ -130,8 +130,9 @@ Use the repo bootstrap to avoid PATH and readiness guesswork:
 - Waits for readiness on TCP and `/tmp` socket paths.
 - Creates `ai_email_dev` if missing.
 - Runs repo migrations (`pnpm -w db:migrate`).
-- If `vector` is missing, installs `pgvector`, locates extension files via `brew list pgvector`, copies `vector.control` + `vector--*.sql` into Homebrew `postgresql@16` extension dir, restarts `postgresql@16`, and verifies:
-  `psql -d postgres -c "select name from pg_available_extensions where name='vector';"`.
+- Detects Postgres major from `psql --version` and verifies extension availability with:
+  `psql -h 127.0.0.1 -d postgres -c "select name from pg_available_extensions where name='vector'"`.
+- If `vector` is missing on `postgresql@16`, it installs `pgvector`, builds pgvector from source using Homebrew `postgresql@16` `pg_config` (`make PG_CONFIG=...` + `make install PG_CONFIG=...`), restarts `postgresql@16`, and re-verifies.
 - If `vector.control` is missing from Homebrew files, it prints:
   `brew list pgvector | rg 'vector\.control|vector--|extension'`
   and suggests `brew reinstall pgvector` (or using a Docker Postgres image with pgvector), then exits non-zero.
