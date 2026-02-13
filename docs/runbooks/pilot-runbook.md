@@ -197,6 +197,16 @@ After replay:
   - `rg -a "<correlationId>" /tmp/ai-email-worker.log`
 - Re-run `pnpm -w smoke:correlation` for end-to-end sanity if needed.
 
+### Queue status (read-only)
+Use this command for a deterministic queue snapshot (counts + active + recent failed samples):
+- `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:status`
+- Filtered example: `REDIS_URL="redis://127.0.0.1:6379" TENANT_ID="00000000-0000-0000-0000-000000000001" LIMIT=10 pnpm -w queue:status`
+
+What the output means:
+- `queue.counts` line gives queue-level totals (`waiting`, `active`, `delayed`, `failed`, `completed`).
+- `queue.active` lines are active samples ordered oldest-first (`ageMs` helps identify stuck work).
+- `queue.failed` lines are recent failed samples (bounded by `SINCE_MINUTES`, default `60`) with truncated reasons.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`
