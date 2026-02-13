@@ -157,6 +157,26 @@ DLQ note:
 - `PERMANENT` errors fail fast and are not retried (worker throws `UnrecoverableError`).
 - Worker `job.error` logs include `errorClass` so retry-vs-fail-fast decisions are visible in operations logs.
 
+### Replay failed jobs (manual)
+Use this after deploying a fix or recovering from transient incidents when you need explicit, operator-controlled replay of failed jobs.
+
+Commands:
+- List candidates only (dry run): `REDIS_URL=redis://127.0.0.1:6379 pnpm -w queue:replay`
+- Filter by correlation: `CORRELATION_ID=<correlation-id> pnpm -w queue:replay`
+- Replay (explicit confirm required): `REPLAY_CONFIRM=1 CORRELATION_ID=<correlation-id> pnpm -w queue:replay`
+- Filter by tenant and recent window: `TENANT_ID=<tenant-id> SINCE_MINUTES=60 LIMIT=100 pnpm -w queue:replay`
+
+Defaults and safety:
+- Default queue is `docs_ingestion` (override with `QUEUE_NAME`).
+- The script never replays unless `REPLAY_CONFIRM=1`.
+- The script never deletes jobs in this step.
+
+After replay:
+- Verify by correlation in logs:
+  - `rg -a "<correlationId>" /tmp/ai-email-api.log`
+  - `rg -a "<correlationId>" /tmp/ai-email-worker.log`
+- Re-run `pnpm -w smoke:correlation` for end-to-end sanity if needed.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`
