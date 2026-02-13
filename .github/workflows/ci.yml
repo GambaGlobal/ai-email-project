@@ -9,12 +9,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       REDIS_URL: redis://127.0.0.1:6379
       DOCS_STORAGE: local
@@ -72,12 +73,12 @@ jobs:
       - name: Start API and worker
         run: |
           set -euo pipefail
-          PIDS_FILE="/tmp/ai-email-dev-pids"
-          nohup bash -lc 'pnpm -w --filter @ai-email/api dev 2>&1 | tee /tmp/ai-email-api.log' >/dev/null 2>&1 &
-          API_PID=$!
-          nohup bash -lc 'pnpm -w --filter @ai-email/worker dev 2>&1 | tee /tmp/ai-email-worker.log' >/dev/null 2>&1 &
-          WORKER_PID=$!
-          printf "API_PID=%s\nWORKER_PID=%s\n" "$API_PID" "$WORKER_PID" > "$PIDS_FILE"
+          : > "$AI_EMAIL_API_LOG"
+          : > "$AI_EMAIL_WORKER_LOG"
+          nohup pnpm -w --filter @ai-email/api dev >> "$AI_EMAIL_API_LOG" 2>&1 &
+          echo $! > /tmp/ai-email-api.pid
+          nohup pnpm -w --filter @ai-email/worker dev >> "$AI_EMAIL_WORKER_LOG" 2>&1 &
+          echo $! > /tmp/ai-email-worker.pid
 
       - name: Wait for API health
         run: |
@@ -100,21 +101,24 @@ jobs:
         if: always()
         run: |
           set +e
-          PIDS_FILE="/tmp/ai-email-dev-pids"
-          if [ -f "$PIDS_FILE" ]; then
-            . "$PIDS_FILE"
-            for pid in "$API_PID" "$WORKER_PID"; do
+          for pid_file in /tmp/ai-email-api.pid /tmp/ai-email-worker.pid; do
+            if [ -f "$pid_file" ]; then
+              pid="$(cat "$pid_file")"
               if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                 kill "$pid" 2>/dev/null || true
+                for _ in $(seq 1 20); do
+                  if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 0.5
+                done
+                if kill -0 "$pid" 2>/dev/null; then
+                  kill -9 "$pid" 2>/dev/null || true
+                fi
               fi
-            done
-            sleep 2
-            for pid in "$API_PID" "$WORKER_PID"; do
-              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null || true
-              fi
-            done
-          fi
+            fi
+          done
+          lsof -ti tcp:3001 | xargs kill -9 >/dev/null 2>&1 || true
 
       - name: Upload smoke logs on failure
         if: failure()
@@ -124,4 +128,6 @@ jobs:
           path: |
             /tmp/ai-email-api.log
             /tmp/ai-email-worker.log
+            /tmp/ai-email-api.pid
+            /tmp/ai-email-worker.pid
           if-no-files-found: warn

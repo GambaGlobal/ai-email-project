@@ -139,9 +139,16 @@ GitHub Actions workflow `CI` runs:
 2. `pnpm -w db:migrate` against Docker service Postgres 16 + pgvector
 3. API + worker startup and `pnpm -w smoke:correlation` deterministic verification
 
-On failures, CI uploads log artifacts named `ci-smoke-logs` containing:
-- `/tmp/ai-email-api.log`
-- `/tmp/ai-email-worker.log`
+On failures, go to GitHub Actions run details and open Artifacts:
+- `ci-smoke-logs` includes `/tmp/ai-email-api.log`, `/tmp/ai-email-worker.log`, and PID files.
+
+## Make CI required on main
+In GitHub:
+1. `Settings` -> `Branches` -> `Branch protection rules` -> `Add rule` for `main`.
+2. Enable `Require status checks to pass before merging`.
+3. Select the CI check shown by Actions for workflow `CI`.
+4. Enable `Require branches to be up to date before merging` (recommended).
+5. Optionally enable `Require a pull request before merging` and PR reviews.
 
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
