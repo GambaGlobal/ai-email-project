@@ -155,6 +155,9 @@ In GitHub:
 4. Enable `Require branches to be up to date before merging` (recommended).
 5. Optionally enable `Require a pull request before merging` and PR reviews.
 
+## Branch protection (required)
+For exact setup/troubleshooting steps, see `docs/runbooks/branch-protection.md`.
+
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
 1. `brew install redis`
