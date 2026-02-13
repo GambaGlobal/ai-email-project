@@ -130,6 +130,12 @@ function printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, po
   );
 }
 
+function failWithVectorGuidance({ brewPath, psqlPath, pgConfigPath, postgresFormula, message }) {
+  console.error(message);
+  printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
+  return false;
+}
+
 function installPgvectorFromSourceForPg16({ brewPath, psqlPath, pgConfigPath, postgresFormula }) {
   const brewListResult = run(brewPath, ["list", "pgvector"]);
   printCommandResult("brew list pgvector", brewListResult);
@@ -139,9 +145,13 @@ function installPgvectorFromSourceForPg16({ brewPath, psqlPath, pgConfigPath, po
   ]);
   printCommandResult("brew list pgvector | rg 'vector\\.control|vector--|extension'", brewListFiltered);
   if (brewListResult.status !== 0) {
-    console.error("Unable to list Homebrew pgvector files.");
-    printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
-    return false;
+    return failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula,
+      message: "Unable to list Homebrew pgvector files."
+    });
   }
 
   const vectorControlPath = (brewListResult.stdout ?? "")
@@ -149,12 +159,14 @@ function installPgvectorFromSourceForPg16({ brewPath, psqlPath, pgConfigPath, po
     .map((line) => line.trim())
     .find((line) => line.endsWith("/vector.control"));
   if (!vectorControlPath) {
-    console.error("No vector.control file found in Homebrew pgvector files.");
     console.error(`Troubleshoot with: ${brewPath} list pgvector | rg 'vector\\.control|vector--|extension'`);
-    console.error("Try: brew reinstall pgvector");
-    console.error("Alternative: use a Docker Postgres image that bundles pgvector.");
-    printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
-    return false;
+    return failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula,
+      message: "No vector.control file found in Homebrew pgvector files."
+    });
   }
 
   const buildResult = run("bash", [
@@ -174,24 +186,36 @@ function installPgvectorFromSourceForPg16({ brewPath, psqlPath, pgConfigPath, po
     buildResult
   );
   if (buildResult.status !== 0) {
-    console.error("Building/installing pgvector from source failed.");
-    printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
-    return false;
+    return failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula,
+      message: "Building/installing pgvector from source failed."
+    });
   }
 
   const restartService = run(brewPath, ["services", "restart", postgresFormula]);
   printCommandResult(`brew services restart ${postgresFormula}`, restartService);
   if (restartService.status !== 0) {
-    console.error(`Failed to restart ${postgresFormula} after pgvector build/install.`);
-    printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
-    return false;
+    return failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula,
+      message: `Failed to restart ${postgresFormula} after pgvector build/install.`
+    });
   }
 
   const vectorAvailable = verifyVectorExtension(psqlPath);
   if (!vectorAvailable) {
-    console.error("Vector extension is still unavailable after source build and restart.");
-    printPgVectorBuildManualCommands({ brewPath, psqlPath, pgConfigPath, postgresFormula });
-    return false;
+    return failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula,
+      message: "Vector extension is still unavailable after source build and restart."
+    });
   }
 
   return true;
@@ -223,7 +247,15 @@ async function main() {
   }
 
   const brewPrefix = brewPrefixResult.stdout.trim();
-  const pgBin = join(brewPrefix, "opt/postgresql@16/bin");
+  const postgresPrefixResult = run(brewPath, ["--prefix", POSTGRES_FORMULA]);
+  printCommandResult(`${brewPath} --prefix ${POSTGRES_FORMULA}`, postgresPrefixResult);
+  if (postgresPrefixResult.status !== 0) {
+    console.error(`Unable to resolve Homebrew prefix for ${POSTGRES_FORMULA}.`);
+    process.exit(1);
+  }
+
+  const postgresPrefix = postgresPrefixResult.stdout.trim();
+  const pgBin = join(postgresPrefix, "bin");
   const psqlPath = join(pgBin, "psql");
   const createdbPath = join(pgBin, "createdb");
   const pgIsReadyPath = join(pgBin, "pg_isready");
@@ -407,14 +439,12 @@ async function main() {
         process.exit(1);
       }
     } else {
-      console.error(
-        `Postgres major ${detectedMajor} detected; auto-remediation is only implemented for ${POSTGRES_FORMULA}.`
-      );
-      printPgVectorBuildManualCommands({
+      failWithVectorGuidance({
         brewPath,
         psqlPath,
         pgConfigPath,
-        postgresFormula: POSTGRES_FORMULA
+        postgresFormula: POSTGRES_FORMULA,
+        message: `Postgres major ${detectedMajor} detected; auto-remediation is only implemented for ${POSTGRES_FORMULA}.`
       });
       process.exit(1);
     }
@@ -438,6 +468,18 @@ async function main() {
   printCommandResult(sanityArgs.join(" "), sanity);
   if (sanity.status !== 0) {
     console.error("Postgres sanity query failed.");
+    process.exit(1);
+  }
+
+  const vectorVerifiedAtEnd = verifyVectorExtension(psqlPath);
+  if (!vectorVerifiedAtEnd) {
+    failWithVectorGuidance({
+      brewPath,
+      psqlPath,
+      pgConfigPath,
+      postgresFormula: POSTGRES_FORMULA,
+      message: "Final verification failed: vector extension is not available."
+    });
     process.exit(1);
   }
 

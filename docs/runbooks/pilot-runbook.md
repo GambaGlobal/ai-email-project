@@ -132,10 +132,11 @@ Use the repo bootstrap to avoid PATH and readiness guesswork:
 - Runs repo migrations (`pnpm -w db:migrate`).
 - Detects Postgres major from `psql --version` and verifies extension availability with:
   `psql -h 127.0.0.1 -d postgres -c "select name from pg_available_extensions where name='vector'"`.
-- If `vector` is missing on `postgresql@16`, it installs `pgvector`, builds pgvector from source using Homebrew `postgresql@16` `pg_config` (`make PG_CONFIG=...` + `make install PG_CONFIG=...`), restarts `postgresql@16`, and re-verifies.
+- If `vector` is missing on `postgresql@16`, it installs `pgvector`, resolves `pg_config` via `brew --prefix postgresql@16` (`<prefix>/bin/pg_config`), builds pgvector from source (`make PG_CONFIG=...` + `make install PG_CONFIG=...`), restarts `postgresql@16`, and re-verifies.
 - If `vector.control` is missing from Homebrew files, it prints:
   `brew list pgvector | rg 'vector\.control|vector--|extension'`
   and suggests `brew reinstall pgvector` (or using a Docker Postgres image with pgvector), then exits non-zero.
+- Before success exit, it runs the same `pg_available_extensions` verification query again and fails non-zero if `vector` is still unavailable.
 - Prints the exact `DATABASE_URL` for your environment.
 
 ## Local storage mode (no AWS/S3 required)
