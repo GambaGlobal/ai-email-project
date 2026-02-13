@@ -120,6 +120,19 @@ Expected response: `PONG`
 Optional Docker-based infra path:
 - `pnpm dev:infra`
 
+## Local storage mode (no AWS/S3 required)
+Use local docs storage for dev machines without S3 credentials/buckets:
+1. `export REDIS_URL=redis://127.0.0.1:6379`
+2. `export DOCS_STORAGE=local`
+3. `export DOCS_LOCAL_DIR=/tmp/ai-email-docs` (optional; default is `<repo>/.tmp/docs`)
+4. Start API: `pnpm -w --filter @ai-email/api dev`
+5. Start worker: `pnpm -w --filter @ai-email/worker dev`
+6. Run smoke: `pnpm -w smoke:correlation`
+
+Expected local file location:
+- If `DOCS_LOCAL_DIR` is set: `<DOCS_LOCAL_DIR>/tenants/<tenantId>/docs/<docId>/<filename>`
+- Default path: `.tmp/docs/tenants/<tenantId>/docs/<docId>/<filename>` at the repo root.
+
 ## Typecheck commands
 Use these commands for local reliability checks:
 - Canonical gate: `pnpm -w repo:check`

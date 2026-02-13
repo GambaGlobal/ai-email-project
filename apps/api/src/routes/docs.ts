@@ -3,11 +3,18 @@ import { randomUUID } from "node:crypto";
 import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
-import { deleteDocObject, putDocObject, resolveDocsBucket } from "../lib/s3.js";
+import {
+  deleteDocObject,
+  putDocObject,
+  resolveDocsBucket,
+  resolveDocsStorageProvider,
+  toDocsStorageUri
+} from "../lib/s3.js";
 import { enqueueDocIngestion } from "../lib/docs-queue.js";
 import { toPubsubIdentifiers, toStructuredLogContext, toStructuredLogEvent } from "../logging.js";
 
-// Expected API env for docs upload:
+// Expected API env for docs upload (storage mode auto-falls back to local when no S3 bucket env is set):
+// DOCS_STORAGE ("s3" | "local"), DOCS_LOCAL_DIR (optional when local),
 // S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_DOCS (or S3_BUCKET),
 // plus REDIS_URL for BullMQ enqueueing.
 const DOC_CATEGORIES = ["Policies", "Itineraries", "FAQs", "Packing"] as const;
@@ -127,6 +134,7 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     const originalFilename = filePart.filename || "upload.bin";
     const safeFilename = originalFilename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const bucket = resolveDocsBucket();
+    const storageProvider = resolveDocsStorageProvider();
     const storageKey = `tenants/${tenantId}/docs/${docId}/${safeFilename}`;
     const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
     const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
@@ -192,16 +200,25 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
               $4,
               $5,
               'queued',
-              's3',
               $6,
               $7,
+              $8,
               '{}'::jsonb,
               now(),
               now()
             )
             RETURNING *
           `,
-          [docId, tenantId, originalFilename, fileBuffer.byteLength, categoryValue, storageKey, `s3://${bucket}/${storageKey}`]
+          [
+            docId,
+            tenantId,
+            originalFilename,
+            fileBuffer.byteLength,
+            categoryValue,
+            storageProvider,
+            storageKey,
+            toDocsStorageUri({ bucket, key: storageKey })
+          ]
         );
       });
     } catch (error) {
