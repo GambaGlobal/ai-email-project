@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const apiBaseUrl = process.env.SMOKE_API_BASE_URL ?? "http://127.0.0.1:3001";
 const tenantId = process.env.SMOKE_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 10000);
-const evidenceTimeoutMs = Number(process.env.SMOKE_EVIDENCE_TIMEOUT_MS ?? 10000);
+const logTimeoutMs = Number(process.env.SMOKE_LOG_TIMEOUT_MS ?? 10000);
 const apiLogPath = process.env.AI_EMAIL_API_LOG ?? "/tmp/ai-email-api.log";
 const workerLogPath = process.env.AI_EMAIL_WORKER_LOG ?? "/tmp/ai-email-worker.log";
 
@@ -19,7 +19,10 @@ const printApiStartHint = () => {
 
 const printEvidenceHints = (cid, missing = []) => {
   if (missing.length > 0) {
-    console.error(`smoke: missing evidence: ${missing.join(", ")}`);
+    console.error("smoke: missing evidence:");
+    for (const item of missing) {
+      console.error(`- ${item}`);
+    }
   }
   console.error(
     `smoke: grep API logs: rg -a "${cid}" "${apiLogPath}" | rg -e "notification.received|notification.enqueued"`
@@ -48,9 +51,77 @@ async function readLog(path) {
   }
 }
 
-function hasEventForCorrelation(logText, cid, eventName) {
-  const eventToken = `"event":"${eventName}"`;
-  return logText.split("\n").some((line) => line.includes(cid) && line.includes(eventToken));
+function parseJsonFromLogLine(line) {
+  const start = line.indexOf("{");
+  const end = line.lastIndexOf("}");
+  if (start === -1 || end <= start) {
+    return null;
+  }
+  const candidate = line.slice(start, end + 1);
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function collectEvents(logText) {
+  const events = [];
+  for (const line of logText.split("\n")) {
+    const event = parseJsonFromLogLine(line);
+    if (event) {
+      events.push(event);
+    }
+  }
+  return events;
+}
+
+function toStringValue(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function findApiEvidence(apiEvents, cid) {
+  const received = apiEvents.find(
+    (event) => event.event === "notification.received" && event.correlationId === cid
+  );
+  const enqueued = apiEvents.find(
+    (event) =>
+      event.event === "notification.enqueued" &&
+      event.correlationId === cid &&
+      toStringValue(event.jobId)
+  );
+  const jobId = enqueued ? toStringValue(enqueued.jobId) : null;
+  return {
+    apiReceived: Boolean(received),
+    apiEnqueued: Boolean(enqueued),
+    jobId
+  };
+}
+
+function findWorkerEvidence(workerEvents, cid, jobId) {
+  if (!jobId) {
+    return {
+      workerStart: false,
+      workerDone: false,
+      workerError: false
+    };
+  }
+
+  const hasEvent = (eventName) =>
+    workerEvents.some(
+      (event) =>
+        event.event === eventName && event.correlationId === cid && toStringValue(event.jobId) === jobId
+    );
+
+  return {
+    workerStart: hasEvent("job.start"),
+    workerDone: hasEvent("job.done"),
+    workerError: hasEvent("job.error")
+  };
 }
 
 function collectMissingEvidence(state) {
@@ -62,11 +133,14 @@ function collectMissingEvidence(state) {
   if (!state.apiEnqueued) {
     missing.push("api.notification.enqueued");
   }
+  if (!state.jobId) {
+    missing.push("api.notification.enqueued.jobId");
+  }
   if (!state.workerStart) {
-    missing.push("worker.job.start");
+    missing.push("worker.job.start (matching correlationId + jobId)");
   }
   if (!state.workerDoneOrError) {
-    missing.push("worker.job.done|job.error");
+    missing.push("worker.job.done|job.error (matching correlationId + jobId)");
   }
 
   return missing;
@@ -138,26 +212,27 @@ try {
 
 console.log(`SMOKE_REQUEST_SENT correlationId=${correlationId}`);
 
-const evidenceDeadline = Date.now() + evidenceTimeoutMs;
+const evidenceDeadline = Date.now() + logTimeoutMs;
 while (Date.now() <= evidenceDeadline) {
   const [apiLog, workerLog] = await Promise.all([readLog(apiLogPath), readLog(workerLogPath)]);
+  const apiEvents = collectEvents(apiLog);
+  const workerEvents = collectEvents(workerLog);
+  const apiEvidence = findApiEvidence(apiEvents, correlationId);
+  const workerEvidence = findWorkerEvidence(workerEvents, correlationId, apiEvidence.jobId);
   const state = {
-    apiReceived: hasEventForCorrelation(apiLog, correlationId, "notification.received"),
-    apiEnqueued: hasEventForCorrelation(apiLog, correlationId, "notification.enqueued"),
-    workerStart: hasEventForCorrelation(workerLog, correlationId, "job.start"),
-    workerDone: hasEventForCorrelation(workerLog, correlationId, "job.done"),
-    workerError: hasEventForCorrelation(workerLog, correlationId, "job.error")
+    ...apiEvidence,
+    ...workerEvidence
   };
   state.workerDoneOrError = state.workerDone || state.workerError;
 
   if (state.workerError) {
-    console.error(`smoke: FAIL correlationId=${correlationId} (job.error)`);
+    console.error(`FAIL: smoke: FAIL correlationId=${correlationId} jobId=${state.jobId} (job.error)`);
     printEvidenceHints(correlationId);
     process.exit(1);
   }
 
   if (state.apiReceived && state.apiEnqueued && state.workerStart && state.workerDone) {
-    console.log(`smoke: PASS correlationId=${correlationId}`);
+    console.log(`PASS: smoke: PASS correlationId=${correlationId} jobId=${state.jobId}`);
     process.exit(0);
   }
 
@@ -165,22 +240,23 @@ while (Date.now() <= evidenceDeadline) {
 }
 
 const [finalApiLog, finalWorkerLog] = await Promise.all([readLog(apiLogPath), readLog(workerLogPath)]);
+const finalApiEvents = collectEvents(finalApiLog);
+const finalWorkerEvents = collectEvents(finalWorkerLog);
+const finalApiEvidence = findApiEvidence(finalApiEvents, correlationId);
+const finalWorkerEvidence = findWorkerEvidence(finalWorkerEvents, correlationId, finalApiEvidence.jobId);
 const finalState = {
-  apiReceived: hasEventForCorrelation(finalApiLog, correlationId, "notification.received"),
-  apiEnqueued: hasEventForCorrelation(finalApiLog, correlationId, "notification.enqueued"),
-  workerStart: hasEventForCorrelation(finalWorkerLog, correlationId, "job.start"),
-  workerDone: hasEventForCorrelation(finalWorkerLog, correlationId, "job.done"),
-  workerError: hasEventForCorrelation(finalWorkerLog, correlationId, "job.error")
+  ...finalApiEvidence,
+  ...finalWorkerEvidence
 };
 finalState.workerDoneOrError = finalState.workerDone || finalState.workerError;
 
 if (finalState.workerError) {
-  console.error(`smoke: FAIL correlationId=${correlationId} (job.error)`);
+  console.error(`FAIL: smoke: FAIL correlationId=${correlationId} jobId=${finalState.jobId} (job.error)`);
   printEvidenceHints(correlationId);
   process.exit(1);
 }
 
 const missingEvidence = collectMissingEvidence(finalState);
-console.error(`smoke: FAIL correlationId=${correlationId} (timeout after ${evidenceTimeoutMs}ms)`);
+console.error(`FAIL: smoke: FAIL correlationId=${correlationId} (timeout after ${logTimeoutMs}ms)`);
 printEvidenceHints(correlationId, missingEvidence);
 process.exit(1);

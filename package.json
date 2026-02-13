@@ -6,6 +6,8 @@
     "preflight": "node ./scripts/preflight.mjs",
     "typecheck": "node ./scripts/typecheck.mjs",
     "smoke:correlation": "node ./scripts/smoke-correlation.mjs",
+    "dev:up": "node ./scripts/dev-up.mjs",
+    "dev:down": "node ./scripts/dev-down.mjs",
     "typecheck:full": "turbo run typecheck --output-logs=full",
     "typecheck:errors": "turbo run typecheck --output-logs=errors-only",
     "typecheck:new": "turbo run typecheck --output-logs=new-only",

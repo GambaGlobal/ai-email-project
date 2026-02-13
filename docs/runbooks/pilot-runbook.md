@@ -122,6 +122,17 @@ Expected worker match example:
 `{"event":"job.start","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,"tenantId":"...","stage":"doc_ingestion","queueName":"docs_ingestion"}`
 `{"event":"job.done","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,...}`
 
+## One-command local dev
+Use this for a single-command bring-up/tear-down loop:
+1. `pnpm -w dev:up`
+2. In a new terminal: `pnpm -w smoke:correlation`
+3. Stop with Ctrl+C in the `dev:up` terminal, or run `pnpm -w dev:down`
+
+Useful overrides:
+- `AI_EMAIL_API_LOG` and `AI_EMAIL_WORKER_LOG` to change default log files.
+- `SMOKE_LOG_TIMEOUT_MS` to extend/reduce smoke log polling timeout.
+- `SKIP_DB_SETUP=1` to skip DB bootstrap when your DB is already ready.
+
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
 1. `brew install redis`
