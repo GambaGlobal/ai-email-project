@@ -38,6 +38,13 @@ const redisConnection = new IORedis(process.env.REDIS_URL, {
 
 const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+function toSafeStack(stack: string | undefined): string | undefined {
+  if (!stack) {
+    return undefined;
+  }
+  return stack.split("\n").slice(0, 6).join("\n");
+}
+
 async function withTenantClient<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>) {
   const client = await dbPool.connect();
 
@@ -61,6 +68,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
     const { tenantId, docId } = job.data;
+    const correlationId = job.data.correlationId;
     const baseLogContext = toStructuredLogContext({
       tenantId: job.data.tenantId,
       mailboxId: job.data.mailboxId,
@@ -68,16 +76,24 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       stage: job.data.stage ?? "doc_ingestion",
       queueName: job.queueName,
       jobId: job.id?.toString(),
-      correlationId: job.data.correlationId,
+      correlationId,
       causationId: job.data.causationId,
       threadId: job.data.threadId,
       messageId: job.data.messageId,
       gmailHistoryId: job.data.gmailHistoryId
     });
+    const attempt = job.attemptsMade + 1;
+    const maxAttempts = job.opts.attempts ?? 1;
 
     // eslint-disable-next-line no-console
     console.log(
-      JSON.stringify(toStructuredLogEvent(baseLogContext, "job.start", { startedAt: startedAtIso }))
+      JSON.stringify(
+        toStructuredLogEvent(baseLogContext, "job.start", {
+          startedAt: startedAtIso,
+          attempt,
+          maxAttempts
+        })
+      )
     );
 
     await withTenantClient(tenantId, async (client) => {
@@ -121,7 +137,9 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         JSON.stringify(
           toStructuredLogEvent(baseLogContext, "job.done", {
             startedAt: startedAtIso,
-            elapsedMs: Date.now() - startedAt
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
           })
         )
       );
@@ -141,13 +159,18 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         );
       });
 
+      const structuredError = toLogError(error);
       // eslint-disable-next-line no-console
       console.error(
         JSON.stringify(
           toStructuredLogEvent(baseLogContext, "job.error", {
             startedAt: startedAtIso,
             elapsedMs: Date.now() - startedAt,
-            error: toLogError(error)
+            attempt,
+            maxAttempts,
+            errorCode: structuredError.code,
+            errorMessage: structuredError.message,
+            errorStack: toSafeStack(structuredError.stack)
           })
         )
       );

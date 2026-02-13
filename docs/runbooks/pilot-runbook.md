@@ -109,6 +109,19 @@ Grep examples:
 - API logs: `grep "<correlationId>" <api-log-file> | grep -E "notification.received|notification.enqueued"`
 - Worker logs: `grep "<correlationId>" <worker-log-file> | grep -E "job.start|job.done|job.error"`
 
+Log verification snippet:
+1. `CID="<correlationId-from-smoke>"`
+2. `rg -a "$CID" /tmp/ai-email-api.log | rg -e "notification.received|notification.enqueued"`
+3. `rg -a "$CID" /tmp/ai-email-worker.log | rg -e "job.start|job.done|job.error"`
+
+Expected API match example:
+`{"event":"notification.received","correlationId":"<CID>","tenantId":"...","docType":"Policies","filename":"correlation-smoke.txt","contentType":"text/plain","sizeBytes":23}`
+`{"event":"notification.enqueued","correlationId":"<CID>","tenantId":"...","queueName":"docs_ingestion","jobId":"1"}`
+
+Expected worker match example:
+`{"event":"job.start","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,"tenantId":"...","stage":"doc_ingestion","queueName":"docs_ingestion"}`
+`{"event":"job.done","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,...}`
+
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
 1. `brew install redis`

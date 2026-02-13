@@ -72,13 +72,15 @@ try {
 }
 
 console.log(`SMOKE_REQUEST_SENT correlationId=${correlationId}`);
+console.log("smoke: default API log file: /tmp/ai-email-api.log");
+console.log("smoke: default worker log file: /tmp/ai-email-worker.log");
 console.log("smoke: verify API logs include events notification.received + notification.enqueued");
 console.log("smoke: verify worker logs include events job.start + job.done (or job.error)");
 console.log(
-  `smoke: grep API logs: grep "${correlationId}" <api-log-file> | grep -E "notification.received|notification.enqueued"`
+  `smoke: grep API logs: rg -a "${correlationId}" /tmp/ai-email-api.log | rg -e "notification.received|notification.enqueued"`
 );
 console.log(
-  `smoke: grep worker logs: grep "${correlationId}" <worker-log-file> | grep -E "job.start|job.done|job.error"`
+  `smoke: grep worker logs: rg -a "${correlationId}" /tmp/ai-email-worker.log | rg -e "job.start|job.done|job.error"`
 );
 console.log(
   "smoke: if worker is not running yet, start it with `pnpm -w --filter @ai-email/worker dev` and rerun smoke."

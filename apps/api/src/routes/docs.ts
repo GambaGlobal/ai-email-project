@@ -196,13 +196,19 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       queueName,
       correlationId
     });
+    const receivedEvent = {
+      event: "notification.received",
+      correlationId,
+      tenantId,
+      docType: categoryValue,
+      filename: originalFilename,
+      contentType: filePart.mimetype,
+      sizeBytes: fileBuffer.byteLength
+    };
 
-    request.log.info(
-      toStructuredLogEvent(baseLogContext, "notification.received", {
-        ...toPubsubIdentifiers(request.headers as Record<string, unknown>)
-      }),
-      "Docs ingestion notification received"
-    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(receivedEvent));
+    request.log.info(toStructuredLogEvent(baseLogContext, "notification.received"), "Docs ingestion notification received");
 
     try {
       await putDocObject({
@@ -324,6 +330,16 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
           "notification.enqueued"
         ),
         "Docs ingestion notification enqueued"
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "notification.enqueued",
+          correlationId: queued.correlationId,
+          tenantId,
+          queueName,
+          jobId: queued.jobId
+        })
       );
     } catch (error) {
       request.log.error({ error, docId }, "Failed to enqueue docs ingestion");

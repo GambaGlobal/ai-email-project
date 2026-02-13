@@ -18,10 +18,11 @@ export type StructuredLogEvent = StructuredLogContext & {
   event: string;
   elapsedMs?: number;
   startedAt?: string;
-  error?: {
-    message: string;
-    stack?: string;
-  };
+  attempt?: number;
+  maxAttempts?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  errorStack?: string;
 };
 
 export function toStructuredLogContext(context: StructuredLogContext): StructuredLogContext {
@@ -46,10 +47,11 @@ export function toStructuredLogEvent(
   extra?: {
     elapsedMs?: number;
     startedAt?: string;
-    error?: {
-      message: string;
-      stack?: string;
-    };
+    attempt?: number;
+    maxAttempts?: number;
+    errorCode?: string;
+    errorMessage?: string;
+    errorStack?: string;
   }
 ): StructuredLogEvent {
   return {
@@ -57,15 +59,21 @@ export function toStructuredLogEvent(
     event,
     elapsedMs: extra?.elapsedMs,
     startedAt: extra?.startedAt,
-    error: extra?.error
+    attempt: extra?.attempt,
+    maxAttempts: extra?.maxAttempts,
+    errorCode: extra?.errorCode,
+    errorMessage: extra?.errorMessage,
+    errorStack: extra?.errorStack
   };
 }
 
-export function toLogError(error: unknown): { message: string; stack?: string } {
+export function toLogError(error: unknown): { message: string; stack?: string; code?: string } {
   if (error instanceof Error) {
+    const maybeCode = (error as { code?: unknown }).code;
     return {
       message: error.message,
-      stack: error.stack
+      stack: error.stack,
+      code: typeof maybeCode === "string" ? maybeCode : undefined
     };
   }
 
