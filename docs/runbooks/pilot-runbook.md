@@ -138,6 +138,20 @@ Useful overrides:
 - `SMOKE_LOG_TIMEOUT_MS` to extend/reduce smoke log polling timeout.
 - `SKIP_DB_SETUP=1` to skip DB bootstrap when your DB is already ready.
 
+## Retry + Error Taxonomy (v1)
+Shared defaults (single source of truth in `@ai-email/shared`):
+- Retries: `attempts=3`
+- Backoff: exponential with base delay `500ms` and cap `30,000ms` (`computeBackoffMs(attempt)` also provided for custom retry contexts)
+- BullMQ defaults: `backoff.type='exponential'`, `backoff.delay=500`, `removeOnComplete={count:1000}`, `removeOnFail={count:5000}`
+
+Error classification (`classifyError`):
+- `TRANSIENT`: network retryable codes (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ECONNREFUSED`), HTTP `408/429/5xx`, and transient Postgres SQLSTATE (`40001`, `40P01`, `53300`, `57P01`, `08006`, `08001`)
+- `PERMANENT`: non-retryable cases by default (including other `4xx`)
+- `IGNORE`: duplicate/already-exists signals (for example duplicate key conflicts)
+
+DLQ note:
+- Permanent failures are currently terminal; explicit DLQ routing is planned for Step `10.8.2` and is not implemented in this step.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`

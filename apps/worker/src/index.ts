@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
-import type { CorrelationId } from "@ai-email/shared";
+import { DEFAULT_JOB_ATTEMPTS, type CorrelationId } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 
 type DocsIngestionJob = {
@@ -83,7 +83,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       gmailHistoryId: job.data.gmailHistoryId
     });
     const attempt = job.attemptsMade + 1;
-    const maxAttempts = job.opts.attempts ?? 1;
+    const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
 
     // eslint-disable-next-line no-console
     console.log(

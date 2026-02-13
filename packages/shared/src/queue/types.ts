@@ -6,6 +6,11 @@ import type {
   ProviderThreadId,
   TenantId
 } from "../mail/types";
+import {
+  DEFAULT_BACKOFF_BASE_MS,
+  DEFAULT_BULLMQ_JOB_OPTIONS,
+  DEFAULT_JOB_ATTEMPTS
+} from "../reliability/retry-policy";
 
 export const QUEUE_NAMES = {
   mailProcessing: "mail_processing",
@@ -59,13 +64,13 @@ export const MAIL_JOB_NAMES: Record<MailJobType, MailJobType> = {
 };
 
 export const DEFAULT_RETRY_POLICY = {
-  attempts: 5,
+  attempts: DEFAULT_JOB_ATTEMPTS,
   backoff: {
     type: "exponential",
-    delayMs: 1000
+    delayMs: DEFAULT_BACKOFF_BASE_MS
   },
-  removeOnComplete: true,
-  removeOnFail: false
+  removeOnComplete: DEFAULT_BULLMQ_JOB_OPTIONS.removeOnComplete,
+  removeOnFail: DEFAULT_BULLMQ_JOB_OPTIONS.removeOnFail
 } as const;
 
 export type MailJobInput = {

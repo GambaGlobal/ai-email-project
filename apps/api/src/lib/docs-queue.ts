@@ -1,6 +1,11 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
-import { asCorrelationId, newCorrelationId, type CorrelationId } from "@ai-email/shared";
+import {
+  DEFAULT_BULLMQ_JOB_OPTIONS,
+  asCorrelationId,
+  newCorrelationId,
+  type CorrelationId
+} from "@ai-email/shared";
 
 const DOCS_INGESTION_QUEUE = "docs_ingestion";
 const DOCS_INGESTION_JOB = "docs.ingest";
@@ -46,10 +51,11 @@ function getQueue(): Queue<DocsIngestionJob> {
   }
 
   queue = new Queue<DocsIngestionJob>(DOCS_INGESTION_QUEUE, {
-    connection: createRedisConnection()
+    connection: createRedisConnection(),
+    defaultJobOptions: DEFAULT_BULLMQ_JOB_OPTIONS
   });
 
-  return queue;
+  return queue as Queue<DocsIngestionJob>;
 }
 
 export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
@@ -64,15 +70,7 @@ export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
     correlationId
   };
 
-  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation, {
-    removeOnComplete: true,
-    removeOnFail: false,
-    attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 1000
-    }
-  });
+  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation);
 
   return {
     jobId: queuedJob.id?.toString(),
