@@ -130,6 +130,9 @@ Use the repo bootstrap to avoid PATH and readiness guesswork:
 - Waits for readiness on TCP and `/tmp` socket paths.
 - Creates `ai_email_dev` if missing.
 - Runs repo migrations (`pnpm -w db:migrate`).
+- If `vector` is missing, installs `pgvector`, links `vector.control` + `vector--*.sql` from Homebrew `pgvector` into Homebrew `postgresql@16` extension dir, restarts `postgresql@16`, and verifies:
+  `psql -d postgres -c "select name from pg_available_extensions where name='vector'"`.
+- If auto-linking fails, prints exact manual link commands and exits non-zero.
 - Prints the exact `DATABASE_URL` for your environment.
 
 ## Local storage mode (no AWS/S3 required)

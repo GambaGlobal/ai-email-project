@@ -80,6 +80,127 @@ function buildDatabaseUrl(mode) {
   return `postgresql:///${TARGET_DB}?host=/tmp`;
 }
 
+function getPsqlArgs(psqlPath, dbMode, database, sql) {
+  if (dbMode === "tcp") {
+    return [psqlPath, "-h", "127.0.0.1", "-d", database, "-c", sql];
+  }
+
+  return [psqlPath, "-d", database, "-c", sql];
+}
+
+function printPgVectorManualCommands({ brewPath, psqlPath, dbMode }) {
+  const verifyArgs = getPsqlArgs(
+    psqlPath,
+    dbMode,
+    "postgres",
+    "select name from pg_available_extensions where name='vector'"
+  );
+  const hostExport = dbMode === "tcp" ? "" : "export PGHOST=/tmp";
+
+  console.error("\nRun these commands manually, then rerun: pnpm -w db:setup");
+  console.error(`  ${brewPath} install pgvector`);
+  console.error(`  PG_PREFIX="$(${brewPath} --prefix postgresql@16)"`);
+  console.error(`  VEC_PREFIX="$(${brewPath} --prefix pgvector)"`);
+  console.error('  EXT_DIR="${PG_PREFIX}/share/postgresql@16/extension"');
+  console.error('  VEC_CONTROL="$(find "${VEC_PREFIX}" -name vector.control -type f | head -n 1)"');
+  console.error('  VEC_DIR="$(dirname "${VEC_CONTROL}")"');
+  console.error('  ln -sf "${VEC_DIR}/vector.control" "${EXT_DIR}/vector.control"');
+  console.error('  ln -sf "${VEC_DIR}"/vector--*.sql "${EXT_DIR}/"');
+  console.error(`  ${brewPath} services restart postgresql@16`);
+  if (hostExport) {
+    console.error(`  ${hostExport}`);
+  }
+  console.error(`  ${verifyArgs.join(" ")}`);
+}
+
+function linkPgVectorExtension({ brewPath, psqlPath, dbMode, queryEnv }) {
+  const pgPrefixResult = run(brewPath, ["--prefix", "postgresql@16"]);
+  printCommandResult(`${brewPath} --prefix postgresql@16`, pgPrefixResult);
+  if (pgPrefixResult.status !== 0) {
+    console.error("Unable to resolve Homebrew prefix for postgresql@16.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const vecPrefixResult = run(brewPath, ["--prefix", "pgvector"]);
+  printCommandResult(`${brewPath} --prefix pgvector`, vecPrefixResult);
+  if (vecPrefixResult.status !== 0) {
+    console.error("Unable to resolve Homebrew prefix for pgvector.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const pgPrefix = pgPrefixResult.stdout.trim();
+  const vecPrefix = vecPrefixResult.stdout.trim();
+  const extDir = join(pgPrefix, "share/postgresql@16/extension");
+
+  if (!existsSync(extDir)) {
+    console.error(`Postgres extension dir does not exist: ${extDir}`);
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const vectorControlSearch = run("find", [vecPrefix, "-name", "vector.control", "-type", "f"]);
+  printCommandResult(`find ${vecPrefix} -name vector.control -type f`, vectorControlSearch);
+  if (vectorControlSearch.status !== 0) {
+    console.error("Unable to locate vector.control under pgvector prefix.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const vectorControlPath = (vectorControlSearch.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!vectorControlPath) {
+    console.error("No vector.control file found under pgvector prefix.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const vectorDir = vectorControlPath.replace(/\/vector\.control$/, "");
+  const linkResult = run("bash", [
+    "-lc",
+    `set -euo pipefail; ln -sf "${vectorControlPath}" "${extDir}/vector.control"; ln -sf "${vectorDir}"/vector--*.sql "${extDir}/"`
+  ]);
+  printCommandResult(
+    `ln -sf "${vectorControlPath}" "${extDir}/vector.control" && ln -sf "${vectorDir}"/vector--*.sql "${extDir}/"`,
+    linkResult
+  );
+  if (linkResult.status !== 0) {
+    console.error("Failed to link pgvector extension files into Postgres extension directory.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const restartService = run(brewPath, ["services", "restart", "postgresql@16"]);
+  printCommandResult("brew services restart postgresql@16", restartService);
+  if (restartService.status !== 0) {
+    console.error("Failed to restart postgresql@16 after linking pgvector extension files.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  const verifyArgs = getPsqlArgs(
+    psqlPath,
+    dbMode,
+    "postgres",
+    "select name from pg_available_extensions where name='vector'"
+  );
+  const verifyVector = run(verifyArgs[0], verifyArgs.slice(1), { env: queryEnv });
+  printCommandResult(
+    `${verifyArgs[0]} ${verifyArgs.slice(1, -2).join(" ")} -c "select name from pg_available_extensions where name='vector'"`,
+    verifyVector
+  );
+  if (verifyVector.status !== 0 || !(verifyVector.stdout ?? "").includes("vector")) {
+    console.error("Vector extension is still unavailable after linking and restart.");
+    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+    return false;
+  }
+
+  return true;
+}
+
 async function main() {
   if (process.platform !== "darwin") {
     console.error("db:setup currently supports macOS Homebrew workflow only.");
@@ -257,18 +378,17 @@ async function main() {
     printCommandResult("brew install pgvector", installPgVector);
     if (installPgVector.status !== 0) {
       console.error("Unable to auto-install pgvector.");
-      console.error("Install it manually, then rerun: pnpm -w db:setup");
+      printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
       process.exit(1);
     }
 
-    const restartService = run(brewPath, ["services", "restart", "postgresql@16"]);
-    printCommandResult("brew services restart postgresql@16", restartService);
-    if (restartService.status !== 0) {
-      console.error("Failed to restart postgresql@16 after pgvector install.");
+    console.log("Linking pgvector extension files into postgresql@16 extension dir...");
+    const linked = linkPgVectorExtension({ brewPath, psqlPath, dbMode, queryEnv });
+    if (!linked) {
       process.exit(1);
     }
 
-    console.log("Retrying migrations after pgvector installation...");
+    console.log("Retrying migrations after pgvector install/link/verification...");
     migrate = run("pnpm", ["-w", "db:migrate"], { env: migrateEnv });
     printCommandResult("pnpm -w db:migrate (retry)", migrate);
   }
