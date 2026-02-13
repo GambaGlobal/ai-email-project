@@ -20,6 +20,7 @@ export type StructuredLogEvent = StructuredLogContext & {
   startedAt?: string;
   attempt?: number;
   maxAttempts?: number;
+  errorClass?: string;
   errorCode?: string;
   errorMessage?: string;
   errorStack?: string;
@@ -49,6 +50,7 @@ export function toStructuredLogEvent(
     startedAt?: string;
     attempt?: number;
     maxAttempts?: number;
+    errorClass?: string;
     errorCode?: string;
     errorMessage?: string;
     errorStack?: string;
@@ -61,6 +63,7 @@ export function toStructuredLogEvent(
     startedAt: extra?.startedAt,
     attempt: extra?.attempt,
     maxAttempts: extra?.maxAttempts,
+    errorClass: extra?.errorClass,
     errorCode: extra?.errorCode,
     errorMessage: extra?.errorMessage,
     errorStack: extra?.errorStack

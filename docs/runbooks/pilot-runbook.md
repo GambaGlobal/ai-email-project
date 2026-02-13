@@ -152,6 +152,11 @@ Error classification (`classifyError`):
 DLQ note:
 - Permanent failures are currently terminal; explicit DLQ routing is planned for Step `10.8.2` and is not implemented in this step.
 
+### Retry semantics
+- `TRANSIENT` errors are retried by BullMQ up to configured attempts.
+- `PERMANENT` errors fail fast and are not retried (worker throws `UnrecoverableError`).
+- Worker `job.error` logs include `errorClass` so retry-vs-fail-fast decisions are visible in operations logs.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`

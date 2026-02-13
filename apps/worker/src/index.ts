@@ -1,7 +1,7 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
-import { DEFAULT_JOB_ATTEMPTS, type CorrelationId } from "@ai-email/shared";
+import { DEFAULT_JOB_ATTEMPTS, ErrorClass, classifyError, type CorrelationId } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 
 type DocsIngestionJob = {
@@ -144,6 +144,9 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         )
       );
     } catch (error) {
+      const classifiedError = classifyError(error);
+      const errorClass =
+        classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
       await withTenantClient(tenantId, async (client) => {
         await client.query(
           `
@@ -168,12 +171,17 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
             elapsedMs: Date.now() - startedAt,
             attempt,
             maxAttempts,
-            errorCode: structuredError.code,
+            errorClass,
+            errorCode: structuredError.code ?? classifiedError.code,
             errorMessage: structuredError.message,
             errorStack: toSafeStack(structuredError.stack)
           })
         )
       );
+
+      if (errorClass === ErrorClass.PERMANENT) {
+        throw new UnrecoverableError(structuredError.message);
+      }
 
       throw error;
     }
