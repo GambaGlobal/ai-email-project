@@ -78,3 +78,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.7.2 | 2026-02-12 | SELF | Added correlation E2E smoke harness and deterministic runbook verification steps. | Checks: `pnpm -w preflight`; `pnpm -w repo:check`; `pnpm -w typecheck:full`. |
 | 10.7.3 | 2026-02-13 | SELF | Fixed API tenant header resolution for `x-tenant-id` by using Fastify lowercase header lookup with normalized string/array handling. | Checks: `pnpm -w repo:check`; `pnpm -w smoke:correlation`. |
 | 10.7.4 | 2026-02-13 | SELF | Added docs local-storage fallback (`DOCS_STORAGE=local`) so `/v1/docs` and smoke correlation work without AWS/S3 buckets. | Checks: `pnpm -w repo:check`; `DOCS_STORAGE=local pnpm -w smoke:correlation`. |
+| 10.7.5 | 2026-02-13 | SELF | Added guarded dev tenant auto-seed for docs ingest and improved DB error surfacing for document record failures. | Checks: `pnpm -w repo:check`; `DOCS_STORAGE=local TENANT_AUTOSEED=1 pnpm -w smoke:correlation`. |

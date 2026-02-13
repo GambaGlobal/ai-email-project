@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
@@ -22,6 +22,7 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 type DocCategory = (typeof DOC_CATEGORIES)[number];
 type DocStatus = "queued" | "indexing" | "ready" | "failed";
+type ErrorWithCode = Error & { code?: string };
 
 type DocRecord = {
   id: string;
@@ -100,6 +101,53 @@ function resolveMultipartFieldValue(
   return typeof normalized.value === "string" ? normalized.value : undefined;
 }
 
+function toSafeStack(error: unknown): string | undefined {
+  if (!(error instanceof Error) || typeof error.stack !== "string") {
+    return undefined;
+  }
+  return error.stack.split("\n").slice(0, 6).join("\n");
+}
+
+function logDocRecordError(
+  request: FastifyRequest,
+  input: {
+    tenantId: string;
+    correlationId: string;
+    error: unknown;
+    message: string;
+  }
+): void {
+  const typedError = input.error as ErrorWithCode;
+  const payload = {
+    tenantId: input.tenantId,
+    correlationId: input.correlationId,
+    errorMessage: typedError?.message,
+    errorCode: typedError?.code,
+    errorStack: toSafeStack(input.error)
+  };
+
+  request.log.error(payload, input.message);
+  // eslint-disable-next-line no-console
+  console.error(`${input.message}: ${JSON.stringify(payload)}`);
+}
+
+async function ensureTenantForDev(tenantId: string): Promise<void> {
+  if (process.env.NODE_ENV === "production" || process.env.TENANT_AUTOSEED !== "1") {
+    return;
+  }
+
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        INSERT INTO tenants (id, name, status)
+        VALUES ($1, $2, 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [tenantId, "Smoke Tenant"]
+    );
+  });
+}
+
 const docsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v1/docs", async (request, reply) => {
     const tenantId = resolveTenantIdFromHeader(request);
@@ -168,6 +216,18 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(500).send({ error: "Unable to store uploaded document" });
     }
 
+    try {
+      await ensureTenantForDev(tenantId);
+    } catch (error) {
+      logDocRecordError(request, {
+        tenantId,
+        correlationId,
+        error,
+        message: "Failed to auto-seed tenant for local docs ingestion"
+      });
+      return reply.code(500).send({ error: "Unable to create document record" });
+    }
+
     let createdRow: Record<string, unknown> | null = null;
 
     try {
@@ -222,7 +282,22 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         );
       });
     } catch (error) {
-      request.log.error({ error }, "Failed to persist doc record");
+      logDocRecordError(request, {
+        tenantId,
+        correlationId,
+        error,
+        message: "Failed to persist doc record"
+      });
+      return reply.code(500).send({ error: "Unable to create document record" });
+    }
+
+    if (!createdRow) {
+      logDocRecordError(request, {
+        tenantId,
+        correlationId,
+        error: new Error("INSERT INTO docs returned no row"),
+        message: "Persisted doc record returned empty result"
+      });
       return reply.code(500).send({ error: "Unable to create document record" });
     }
 
@@ -253,10 +328,6 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       request.log.error({ error, docId }, "Failed to enqueue docs ingestion");
       return reply.code(500).send({ error: "Unable to enqueue document ingestion" });
-    }
-
-    if (!createdRow) {
-      return reply.code(500).send({ error: "Unable to create document record" });
     }
 
     return reply.code(201).send(toDocRecord(createdRow));

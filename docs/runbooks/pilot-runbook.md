@@ -125,9 +125,17 @@ Use local docs storage for dev machines without S3 credentials/buckets:
 1. `export REDIS_URL=redis://127.0.0.1:6379`
 2. `export DOCS_STORAGE=local`
 3. `export DOCS_LOCAL_DIR=/tmp/ai-email-docs` (optional; default is `<repo>/.tmp/docs`)
-4. Start API: `pnpm -w --filter @ai-email/api dev`
-5. Start worker: `pnpm -w --filter @ai-email/worker dev`
-6. Run smoke: `pnpm -w smoke:correlation`
+4. `export TENANT_AUTOSEED=1` (dev-only; enables automatic tenant seed on docs ingest)
+5. Start API: `pnpm -w --filter @ai-email/api dev`
+6. Start worker: `pnpm -w --filter @ai-email/worker dev`
+7. Run smoke: `pnpm -w smoke:correlation`
+
+DB note:
+- `DATABASE_URL` must point to a reachable Postgres with migrations applied.
+- If DB config is wrong, API logs include underlying DB `errorMessage` and `errorCode` for docs record writes.
+
+Grep tip for worker logs:
+- `/tmp` log files piped through `tee` may be detected as binary by `rg`; use `rg -a "$CID" /tmp/ai-email-worker.log`.
 
 Expected local file location:
 - If `DOCS_LOCAL_DIR` is set: `<DOCS_LOCAL_DIR>/tenants/<tenantId>/docs/<docId>/<filename>`

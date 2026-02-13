@@ -1,7 +1,7 @@
 import { newCorrelationId } from "@ai-email/shared/pipeline/ids-runtime";
 
 const apiBaseUrl = process.env.SMOKE_API_BASE_URL ?? "http://127.0.0.1:3001";
-const tenantId = process.env.SMOKE_TENANT_ID ?? "11111111-1111-1111-1111-111111111111";
+const tenantId = process.env.SMOKE_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 10000);
 
 const correlationId = newCorrelationId();
