@@ -11,6 +11,8 @@
     "queue:pause": "ACTION=pause node ./scripts/queue-control.mjs",
     "queue:resume": "ACTION=resume node ./scripts/queue-control.mjs",
     "queue:is-paused": "ACTION=is-paused node ./scripts/queue-control.mjs",
+    "failures:list": "node ./scripts/failures-list.mjs",
+    "failures:show": "node ./scripts/failures-show.mjs",
     "kill-switch:set": "node ./scripts/kill-switch-set.mjs",
     "dev:up": "node ./scripts/dev-up.mjs",
     "dev:down": "node ./scripts/dev-down.mjs",

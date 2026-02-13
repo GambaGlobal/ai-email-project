@@ -52,6 +52,13 @@ function toSafeStack(stack: string | undefined): string | undefined {
   return stack.split("\n").slice(0, 6).join("\n");
 }
 
+function truncateText(value: string | undefined, max: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length > max ? value.slice(0, max) : value;
+}
+
 async function withTenantClient<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>) {
   const client = await dbPool.connect();
 
@@ -234,6 +241,57 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       const classifiedError = classifyError(error);
       const errorClass =
         classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
+      const structuredError = toLogError(error);
+      const truncatedStack = truncateText(toSafeStack(structuredError.stack), 4000);
+      const stage = job.data.stage ?? "doc_ingestion";
+
+      try {
+        await withTenantClient(tenantId, async (client) => {
+          await client.query(
+            `
+              INSERT INTO doc_ingestion_failures (
+                tenant_id,
+                correlation_id,
+                job_id,
+                stage,
+                error_class,
+                error_code,
+                error_message,
+                error_stack,
+                attempt,
+                max_attempts
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, LEFT($7, 2000), $8, $9, $10)
+            `,
+            [
+              tenantId,
+              correlationId,
+              job.id?.toString() ?? "unknown",
+              stage,
+              errorClass,
+              structuredError.code ?? classifiedError.code ?? null,
+              structuredError.message,
+              truncatedStack ?? null,
+              attempt,
+              maxAttempts
+            ]
+          );
+        });
+      } catch (recordError) {
+        const recordMessage = recordError instanceof Error ? recordError.message : String(recordError);
+        // eslint-disable-next-line no-console
+        console.error(
+          JSON.stringify({
+            event: "failure.record_error",
+            tenantId,
+            correlationId,
+            queueName: job.queueName,
+            jobId: job.id?.toString(),
+            errorMessage: recordMessage
+          })
+        );
+      }
+
       await withTenantClient(tenantId, async (client) => {
         await client.query(
           `
@@ -249,7 +307,6 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         );
       });
 
-      const structuredError = toLogError(error);
       // eslint-disable-next-line no-console
       console.error(
         JSON.stringify(
@@ -261,7 +318,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
             errorClass,
             errorCode: structuredError.code ?? classifiedError.code,
             errorMessage: structuredError.message,
-            errorStack: toSafeStack(structuredError.stack)
+            errorStack: truncatedStack
           })
         )
       );

@@ -219,6 +219,16 @@ Commands:
 Queue override:
 - Set `QUEUE_NAME` to operate on a queue other than `docs_ingestion`.
 
+### Failure triage: docs ingestion failures
+Use operator commands first to find what failed and why (tenant-scoped, read-only):
+- List recent failures: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w failures:list`
+- Filter by correlation: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" CORRELATION_ID="<cid>" pnpm -w failures:list`
+- Show one failure by job id: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" JOB_ID="<job-id>" pnpm -w failures:show`
+
+Operator decision guide:
+- `errorClass=TRANSIENT`: watch `queue:status`, verify dependencies, and allow normal retries/replay path.
+- `errorClass=PERMANENT`: enable kill switch, fix root cause, then use `queue:replay` with strict filters to recover safely.
+
 ## CI
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`
