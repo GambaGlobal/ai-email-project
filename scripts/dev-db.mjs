@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const TARGET_DB = "ai_email_dev";
@@ -93,23 +93,28 @@ function printPgVectorManualCommands({ brewPath, psqlPath, dbMode }) {
     psqlPath,
     dbMode,
     "postgres",
-    "select name from pg_available_extensions where name='vector'"
+    "select name from pg_available_extensions where name='vector';"
   );
   const hostExport = dbMode === "tcp" ? "" : "export PGHOST=/tmp";
+  const listVectorCmd = `${brewPath} list pgvector | rg 'vector\\.control|vector--|extension'`;
 
   console.error("\nRun these commands manually, then rerun: pnpm -w db:setup");
   console.error(`  ${brewPath} install pgvector`);
+  console.error(`  ${listVectorCmd}`);
   console.error(`  PG_PREFIX="$(${brewPath} --prefix postgresql@16)"`);
-  console.error(`  VEC_PREFIX="$(${brewPath} --prefix pgvector)"`);
   console.error('  EXT_DIR="${PG_PREFIX}/share/postgresql@16/extension"');
-  console.error('  VEC_CONTROL="$(find "${VEC_PREFIX}" -name vector.control -type f | head -n 1)"');
+  console.error(`  VEC_CONTROL="$(${brewPath} list pgvector | rg 'vector\\.control$' | head -n 1)"`);
   console.error('  VEC_DIR="$(dirname "${VEC_CONTROL}")"');
-  console.error('  ln -sf "${VEC_DIR}/vector.control" "${EXT_DIR}/vector.control"');
-  console.error('  ln -sf "${VEC_DIR}"/vector--*.sql "${EXT_DIR}/"');
+  console.error('  cp -f "${VEC_DIR}/vector.control" "${EXT_DIR}/vector.control"');
+  console.error('  cp -f "${VEC_DIR}"/vector--*.sql "${EXT_DIR}/"');
   console.error(`  ${brewPath} services restart postgresql@16`);
   if (hostExport) {
     console.error(`  ${hostExport}`);
   }
+  console.error("If files are missing, try: brew reinstall pgvector");
+  console.error(
+    "Alternative: use a Docker Postgres image that already includes pgvector for local development."
+  );
   console.error(`  ${verifyArgs.join(" ")}`);
 }
 
@@ -122,16 +127,7 @@ function linkPgVectorExtension({ brewPath, psqlPath, dbMode, queryEnv }) {
     return false;
   }
 
-  const vecPrefixResult = run(brewPath, ["--prefix", "pgvector"]);
-  printCommandResult(`${brewPath} --prefix pgvector`, vecPrefixResult);
-  if (vecPrefixResult.status !== 0) {
-    console.error("Unable to resolve Homebrew prefix for pgvector.");
-    printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
-    return false;
-  }
-
   const pgPrefix = pgPrefixResult.stdout.trim();
-  const vecPrefix = vecPrefixResult.stdout.trim();
   const extDir = join(pgPrefix, "share/postgresql@16/extension");
 
   if (!existsSync(extDir)) {
@@ -140,37 +136,57 @@ function linkPgVectorExtension({ brewPath, psqlPath, dbMode, queryEnv }) {
     return false;
   }
 
-  const vectorControlSearch = run("find", [vecPrefix, "-name", "vector.control", "-type", "f"]);
-  printCommandResult(`find ${vecPrefix} -name vector.control -type f`, vectorControlSearch);
-  if (vectorControlSearch.status !== 0) {
-    console.error("Unable to locate vector.control under pgvector prefix.");
+  const brewListResult = run(brewPath, ["list", "pgvector"]);
+  printCommandResult("brew list pgvector", brewListResult);
+  const brewListFiltered = run("bash", [
+    "-lc",
+    `${brewPath} list pgvector | (rg 'vector\\.control|vector--|extension' || true)`
+  ]);
+  printCommandResult("brew list pgvector | rg 'vector\\.control|vector--|extension'", brewListFiltered);
+  if (brewListResult.status !== 0) {
+    console.error("Unable to list pgvector package files.");
     printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
     return false;
   }
 
-  const vectorControlPath = (vectorControlSearch.stdout ?? "")
+  const vectorControlPath = (brewListResult.stdout ?? "")
     .split("\n")
     .map((line) => line.trim())
-    .find(Boolean);
+    .find((line) => line.endsWith("/vector.control"));
   if (!vectorControlPath) {
-    console.error("No vector.control file found under pgvector prefix.");
+    console.error("No vector.control file found in Homebrew pgvector files.");
+    console.error("Troubleshooting output shown above:");
+    console.error(`  ${brewPath} list pgvector | rg 'vector\\.control|vector--|extension'`);
+    console.error("Try: brew reinstall pgvector");
+    console.error("Alternative: use a Docker Postgres image that bundles pgvector.");
     printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
     return false;
   }
 
-  const vectorDir = vectorControlPath.replace(/\/vector\.control$/, "");
-  const linkResult = run("bash", [
-    "-lc",
-    `set -euo pipefail; ln -sf "${vectorControlPath}" "${extDir}/vector.control"; ln -sf "${vectorDir}"/vector--*.sql "${extDir}/"`
-  ]);
-  printCommandResult(
-    `ln -sf "${vectorControlPath}" "${extDir}/vector.control" && ln -sf "${vectorDir}"/vector--*.sql "${extDir}/"`,
-    linkResult
-  );
-  if (linkResult.status !== 0) {
-    console.error("Failed to link pgvector extension files into Postgres extension directory.");
+  const srcDir = dirname(vectorControlPath);
+  if (!srcDir || srcDir === ".") {
+    console.error(`Invalid pgvector source directory resolved from ${vectorControlPath}`);
+    console.error("Refusing to continue to avoid self-referential symlinks.");
     printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
     return false;
+  }
+
+  if (srcDir === extDir) {
+    console.log("pgvector extension files are already in the Postgres extension dir; skipping install copy.");
+  } else {
+    const copyResult = run("bash", [
+      "-lc",
+      `set -euo pipefail; cp -f "${srcDir}/vector.control" "${extDir}/vector.control"; cp -f "${srcDir}"/vector--*.sql "${extDir}/"`
+    ]);
+    printCommandResult(
+      `cp -f "${srcDir}/vector.control" "${extDir}/vector.control" && cp -f "${srcDir}"/vector--*.sql "${extDir}/"`,
+      copyResult
+    );
+    if (copyResult.status !== 0) {
+      console.error("Failed to copy pgvector extension files into Postgres extension directory.");
+      printPgVectorManualCommands({ brewPath, psqlPath, dbMode });
+      return false;
+    }
   }
 
   const restartService = run(brewPath, ["services", "restart", "postgresql@16"]);
@@ -185,11 +201,11 @@ function linkPgVectorExtension({ brewPath, psqlPath, dbMode, queryEnv }) {
     psqlPath,
     dbMode,
     "postgres",
-    "select name from pg_available_extensions where name='vector'"
+    "select name from pg_available_extensions where name='vector';"
   );
   const verifyVector = run(verifyArgs[0], verifyArgs.slice(1), { env: queryEnv });
   printCommandResult(
-    `${verifyArgs[0]} ${verifyArgs.slice(1, -2).join(" ")} -c "select name from pg_available_extensions where name='vector'"`,
+    `${verifyArgs[0]} ${verifyArgs.slice(1, -2).join(" ")} -c "select name from pg_available_extensions where name='vector';"`,
     verifyVector
   );
   if (verifyVector.status !== 0 || !(verifyVector.stdout ?? "").includes("vector")) {
