@@ -157,6 +157,21 @@ DLQ note:
 - `PERMANENT` errors fail fast and are not retried (worker throws `UnrecoverableError`).
 - Worker `job.error` logs include `errorClass` so retry-vs-fail-fast decisions are visible in operations logs.
 
+### Kill switches
+Use kill switches to stop docs ingestion quickly during pilot incidents.
+
+Global kill switch:
+- Set `DOCS_INGESTION_DISABLED=1` before starting API/worker.
+- Effect: docs upload/retry endpoints return `503` with `error: "Docs ingestion disabled"` and no doc write/enqueue side effects.
+- Expected logs: `notification.rejected` with `reason="kill_switch_global"` (API), `job.ignored` with `reason="kill_switch_global"` (worker).
+
+Per-tenant kill switch (Postgres):
+- Enable for local default tenant:
+  - `psql "$DATABASE_URL" -c "INSERT INTO tenant_kill_switches (tenant_id, key, is_enabled, reason, updated_at) VALUES ('00000000-0000-0000-0000-000000000001', 'docs_ingestion', true, 'incident mitigation', now()) ON CONFLICT (tenant_id, key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled, reason = EXCLUDED.reason, updated_at = now();"`
+- Disable for that tenant:
+  - `psql "$DATABASE_URL" -c "INSERT INTO tenant_kill_switches (tenant_id, key, is_enabled, reason, updated_at) VALUES ('00000000-0000-0000-0000-000000000001', 'docs_ingestion', false, null, now()) ON CONFLICT (tenant_id, key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled, reason = EXCLUDED.reason, updated_at = now();"`
+- Expected logs: `notification.rejected` with `reason="kill_switch_tenant"` (API), `job.ignored` with `reason="kill_switch_tenant"` (worker).
+
 ### Replay failed jobs (manual)
 Use this after deploying a fix or recovering from transient incidents when you need explicit, operator-controlled replay of failed jobs.
 

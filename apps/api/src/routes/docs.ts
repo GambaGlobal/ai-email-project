@@ -1,6 +1,11 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
-import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
+import {
+  KILL_SWITCH_DOCS_INGESTION,
+  asCorrelationId,
+  isGlobalDocsIngestionDisabled,
+  newCorrelationId
+} from "@ai-email/shared";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
 import {
@@ -23,6 +28,7 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 type DocCategory = (typeof DOC_CATEGORIES)[number];
 type DocStatus = "queued" | "indexing" | "ready" | "failed";
 type ErrorWithCode = Error & { code?: string };
+type TenantKillSwitchRow = { isEnabled: boolean; reason: string | null };
 
 type DocRecord = {
   id: string;
@@ -148,11 +154,108 @@ async function ensureTenantForDev(tenantId: string): Promise<void> {
   });
 }
 
+function toDisabledResponse(input: {
+  scope: "global" | "tenant";
+  tenantId: string;
+  correlationId: string;
+  reason?: string | null;
+}) {
+  return {
+    error: "Docs ingestion disabled",
+    scope: input.scope,
+    key: KILL_SWITCH_DOCS_INGESTION,
+    tenantId: input.tenantId,
+    correlationId: input.correlationId,
+    reason: input.reason ?? null
+  };
+}
+
+async function getTenantKillSwitchState(tenantId: string, key: string): Promise<TenantKillSwitchRow | null> {
+  return withTenantClient(tenantId, async (client) => {
+    const row = await queryOne(
+      client,
+      `
+        SELECT is_enabled, reason
+        FROM tenant_kill_switches
+        WHERE tenant_id = $1
+          AND key = $2
+      `,
+      [tenantId, key]
+    );
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      isEnabled: row.is_enabled === true,
+      reason: typeof row.reason === "string" ? row.reason : null
+    };
+  });
+}
+
 const docsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v1/docs", async (request, reply) => {
     const tenantId = resolveTenantIdFromHeader(request);
     if (!tenantId) {
       return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
+    }
+    const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
+    const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
+    const stage = "doc_ingestion";
+    const queueName = "docs_ingestion";
+    const baseLogContext = toStructuredLogContext({
+      tenantId,
+      mailboxId,
+      provider: "other",
+      stage,
+      queueName,
+      correlationId
+    });
+
+    if (isGlobalDocsIngestionDisabled(process.env)) {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "notification.rejected",
+          reason: "kill_switch_global",
+          key: KILL_SWITCH_DOCS_INGESTION,
+          correlationId,
+          tenantId,
+          queueName
+        })
+      );
+      return reply.code(503).send(toDisabledResponse({ scope: "global", tenantId, correlationId }));
+    }
+
+    try {
+      const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_DOCS_INGESTION);
+      if (tenantKillSwitch?.isEnabled) {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "notification.rejected",
+            reason: "kill_switch_tenant",
+            key: KILL_SWITCH_DOCS_INGESTION,
+            correlationId,
+            tenantId,
+            queueName
+          })
+        );
+        return reply
+          .code(503)
+          .send(
+            toDisabledResponse({
+              scope: "tenant",
+              tenantId,
+              correlationId,
+              reason: tenantKillSwitch.reason
+            })
+          );
+      }
+    } catch (error) {
+      request.log.error({ error, tenantId }, "Failed to evaluate tenant docs kill switch");
+      return reply.code(500).send({ error: "Unable to evaluate docs ingestion availability" });
     }
 
     let filePart;
@@ -184,18 +287,6 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     const bucket = resolveDocsBucket();
     const storageProvider = resolveDocsStorageProvider();
     const storageKey = `tenants/${tenantId}/docs/${docId}/${safeFilename}`;
-    const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
-    const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
-    const stage = "doc_ingestion";
-    const queueName = "docs_ingestion";
-    const baseLogContext = toStructuredLogContext({
-      tenantId,
-      mailboxId,
-      provider: "other",
-      stage,
-      queueName,
-      correlationId
-    });
     const receivedEvent = {
       event: "notification.received",
       correlationId,
@@ -490,6 +581,63 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
     if (!tenantId) {
       return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
     }
+    const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
+    const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
+    const stage = "doc_ingestion";
+    const queueName = "docs_ingestion";
+    const baseLogContext = toStructuredLogContext({
+      tenantId,
+      mailboxId,
+      provider: "other",
+      stage,
+      queueName,
+      correlationId
+    });
+
+    if (isGlobalDocsIngestionDisabled(process.env)) {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "notification.rejected",
+          reason: "kill_switch_global",
+          key: KILL_SWITCH_DOCS_INGESTION,
+          correlationId,
+          tenantId,
+          queueName
+        })
+      );
+      return reply.code(503).send(toDisabledResponse({ scope: "global", tenantId, correlationId }));
+    }
+
+    try {
+      const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_DOCS_INGESTION);
+      if (tenantKillSwitch?.isEnabled) {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "notification.rejected",
+            reason: "kill_switch_tenant",
+            key: KILL_SWITCH_DOCS_INGESTION,
+            correlationId,
+            tenantId,
+            queueName
+          })
+        );
+        return reply
+          .code(503)
+          .send(
+            toDisabledResponse({
+              scope: "tenant",
+              tenantId,
+              correlationId,
+              reason: tenantKillSwitch.reason
+            })
+          );
+      }
+    } catch (error) {
+      request.log.error({ error, tenantId }, "Failed to evaluate tenant docs kill switch");
+      return reply.code(500).send({ error: "Unable to evaluate docs ingestion availability" });
+    }
 
     try {
       const retried = await withTenantClient(tenantId, async (client) => {
@@ -521,19 +669,6 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         request.log.error({ docId: request.params.id }, "Retry missing storage key");
         return reply.code(500).send({ error: "Document storage pointer missing" });
       }
-
-      const correlationId = resolveCorrelationIdFromHeader(request.headers as Record<string, unknown>);
-      const mailboxId = resolveMailboxIdFromHeader(request.headers as Record<string, unknown>);
-      const stage = "doc_ingestion";
-      const queueName = "docs_ingestion";
-      const baseLogContext = toStructuredLogContext({
-        tenantId,
-        mailboxId,
-        provider: "other",
-        stage,
-        queueName,
-        correlationId
-      });
 
       request.log.info(
         toStructuredLogEvent(baseLogContext, "notification.received", {

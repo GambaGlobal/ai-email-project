@@ -1,7 +1,14 @@
 import { UnrecoverableError, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
-import { DEFAULT_JOB_ATTEMPTS, ErrorClass, classifyError, type CorrelationId } from "@ai-email/shared";
+import {
+  DEFAULT_JOB_ATTEMPTS,
+  ErrorClass,
+  KILL_SWITCH_DOCS_INGESTION,
+  classifyError,
+  isGlobalDocsIngestionDisabled,
+  type CorrelationId
+} from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 
 type DocsIngestionJob = {
@@ -62,6 +69,26 @@ async function withTenantClient<T>(tenantId: string, callback: (client: PoolClie
   }
 }
 
+async function getTenantKillSwitchState(tenantId: string, key: string) {
+  return withTenantClient(tenantId, async (client) => {
+    const result = await client.query(
+      `
+        SELECT is_enabled, reason
+        FROM tenant_kill_switches
+        WHERE tenant_id = $1
+          AND key = $2
+      `,
+      [tenantId, key]
+    );
+
+    const row = result.rows[0] as { is_enabled?: unknown; reason?: unknown } | undefined;
+    return {
+      isEnabled: row?.is_enabled === true,
+      reason: typeof row?.reason === "string" ? row.reason : null
+    };
+  });
+}
+
 const ingestionWorker = new Worker<DocsIngestionJob>(
   docsQueueName,
   async (job) => {
@@ -95,6 +122,66 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         })
       )
     );
+
+    if (isGlobalDocsIngestionDisabled(process.env)) {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "job.ignored",
+          reason: "kill_switch_global",
+          key: KILL_SWITCH_DOCS_INGESTION,
+          correlationId,
+          tenantId,
+          queueName: job.queueName,
+          jobId: job.id?.toString(),
+          attempt,
+          maxAttempts
+        })
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
+          })
+        )
+      );
+      return;
+    }
+
+    const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_DOCS_INGESTION);
+    if (tenantKillSwitch.isEnabled) {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "job.ignored",
+          reason: "kill_switch_tenant",
+          key: KILL_SWITCH_DOCS_INGESTION,
+          killSwitchReason: tenantKillSwitch.reason,
+          correlationId,
+          tenantId,
+          queueName: job.queueName,
+          jobId: job.id?.toString(),
+          attempt,
+          maxAttempts
+        })
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
+          })
+        )
+      );
+      return;
+    }
 
     await withTenantClient(tenantId, async (client) => {
       await client.query(
