@@ -5,6 +5,7 @@ const tenantId = process.env.SMOKE_TENANT_ID ?? "smoke-tenant";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 10000);
 
 const correlationId = newCorrelationId();
+console.log(`SMOKE_CORRELATION_ID=${correlationId}`);
 const endpoint = `${apiBaseUrl}/v1/docs`;
 
 const printApiStartHint = () => {
@@ -20,18 +21,26 @@ form.append(
   "correlation-smoke.txt"
 );
 
+const maybeFormWithHeaders = form;
+const multipartHeaders =
+  typeof maybeFormWithHeaders?.getHeaders === "function"
+    ? maybeFormWithHeaders.getHeaders()
+    : {};
+const headers = {
+  ...multipartHeaders,
+  "x-tenant-id": tenantId,
+  "x-correlation-id": correlationId,
+  "x-goog-message-number": `smoke-${Date.now()}`,
+  "x-goog-subscription-name": "local-smoke-correlation"
+};
+
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 try {
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "x-tenant-id": tenantId,
-      "x-correlation-id": correlationId,
-      "x-goog-message-number": `smoke-${Date.now()}`,
-      "x-goog-subscription-name": "local-smoke-correlation"
-    },
+    headers,
     body: form,
     signal: controller.signal
   });
@@ -39,17 +48,20 @@ try {
   const responseText = await response.text();
   if (!response.ok) {
     console.error(`smoke: request failed with status ${response.status}`);
+    console.error(`smoke: correlationId=${correlationId}`);
     console.error(responseText);
     process.exit(1);
   }
 } catch (error) {
   if (error instanceof Error && error.name === "AbortError") {
     console.error(`smoke: request timed out after ${timeoutMs}ms`);
+    console.error(`smoke: correlationId=${correlationId}`);
     printApiStartHint();
     process.exit(1);
   }
 
   printApiStartHint();
+  console.error(`smoke: correlationId=${correlationId}`);
   if (error instanceof Error) {
     console.error(`smoke: ${error.message}`);
   }

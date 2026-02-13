@@ -90,7 +90,7 @@ Use the same structured keys in API + worker logs:
 
 ## Correlation E2E smoke
 Use this deterministic local sequence to prove the same `correlationId` flows API -> queue -> worker for docs ingestion:
-1. Start local infra if needed for queueing/storage: `pnpm dev:infra`
+1. Ensure Redis is running (default path on macOS without Docker; see section below).
 2. Start API: `pnpm -w --filter @ai-email/api dev`
 3. Start worker: `pnpm -w --filter @ai-email/worker dev`
 4. Run smoke request: `pnpm -w smoke:correlation`
@@ -108,6 +108,17 @@ Core keys expected on these events:
 Grep examples:
 - API logs: `grep "<correlationId>" <api-log-file> | grep -E "notification.received|notification.enqueued"`
 - Worker logs: `grep "<correlationId>" <worker-log-file> | grep -E "job.start|job.done|job.error"`
+
+## Redis (macOS, no Docker)
+Use this as the default local setup path when Docker is unavailable:
+1. `brew install redis`
+2. `brew services start redis`
+3. `redis-cli ping`
+
+Expected response: `PONG`
+
+Optional Docker-based infra path:
+- `pnpm dev:infra`
 
 ## Typecheck commands
 Use these commands for local reliability checks:
