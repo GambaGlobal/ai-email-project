@@ -7,6 +7,7 @@
     "typecheck": "node ./scripts/typecheck.mjs",
     "smoke:correlation": "node ./scripts/smoke-correlation.mjs",
     "queue:replay": "node ./scripts/queue-replay-failed.mjs",
+    "kill-switch:set": "node ./scripts/kill-switch-set.mjs",
     "dev:up": "node ./scripts/dev-up.mjs",
     "dev:down": "node ./scripts/dev-down.mjs",
     "typecheck:full": "turbo run typecheck --output-logs=full",

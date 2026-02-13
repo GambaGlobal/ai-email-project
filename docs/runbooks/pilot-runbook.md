@@ -165,7 +165,12 @@ Global kill switch:
 - Effect: docs upload/retry endpoints return `503` with `error: "Docs ingestion disabled"` and no doc write/enqueue side effects.
 - Expected logs: `notification.rejected` with `reason="kill_switch_global"` (API), `job.ignored` with `reason="kill_switch_global"` (worker).
 
-Per-tenant kill switch (Postgres):
+Preferred kill switch command (recommended):
+- Dry run (no write): `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="docs_ingestion" IS_ENABLED="1" REASON="incident mitigation" pnpm -w kill-switch:set`
+- Apply enable: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="docs_ingestion" IS_ENABLED="1" REASON="incident mitigation" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+- Apply disable: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="docs_ingestion" IS_ENABLED="0" REASON="recovered" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+
+Per-tenant kill switch SQL fallback (Postgres):
 - Enable for local default tenant:
   - `psql "$DATABASE_URL" -c "INSERT INTO tenant_kill_switches (tenant_id, key, is_enabled, reason, updated_at) VALUES ('00000000-0000-0000-0000-000000000001', 'docs_ingestion', true, 'incident mitigation', now()) ON CONFLICT (tenant_id, key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled, reason = EXCLUDED.reason, updated_at = now();"`
 - Disable for that tenant:
