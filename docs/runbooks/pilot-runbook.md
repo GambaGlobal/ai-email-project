@@ -120,15 +120,37 @@ Expected response: `PONG`
 Optional Docker-based infra path:
 - `pnpm dev:infra`
 
+## Local DB (Postgres) setup
+Use the repo bootstrap to avoid PATH and readiness guesswork:
+1. `pnpm -w db:setup`
+2. Copy the `export DATABASE_URL="..."` line printed by the script and run it in your shell.
+
+`db:setup` does all of the following:
+- Starts/ensures Homebrew Postgres service (`postgresql@16`).
+- Waits for readiness on TCP and `/tmp` socket paths.
+- Creates `ai_email_dev` if missing.
+- Runs repo migrations (`pnpm -w db:migrate`).
+- Prints the exact `DATABASE_URL` for your environment.
+
 ## Local storage mode (no AWS/S3 required)
-Use local docs storage for dev machines without S3 credentials/buckets:
-1. `export REDIS_URL=redis://127.0.0.1:6379`
-2. `export DOCS_STORAGE=local`
-3. `export DOCS_LOCAL_DIR=/tmp/ai-email-docs` (optional; default is `<repo>/.tmp/docs`)
-4. `export TENANT_AUTOSEED=1` (dev-only; enables automatic tenant seed on docs ingest)
-5. Start API: `pnpm -w --filter @ai-email/api dev`
-6. Start worker: `pnpm -w --filter @ai-email/worker dev`
-7. Run smoke: `pnpm -w smoke:correlation`
+Fully green local smoke sequence (Redis + Postgres + local docs):
+1. `pnpm -w db:setup`
+2. `export DATABASE_URL="..."` (copy the exact value printed by `db:setup`)
+3. `export REDIS_URL=redis://127.0.0.1:6379`
+4. `export DOCS_STORAGE=local`
+5. `export DOCS_LOCAL_DIR=/tmp/ai-email-docs` (optional; default is `<repo>/.tmp/docs`)
+6. `export TENANT_AUTOSEED=1` (dev-only; enables automatic tenant seed on docs ingest)
+7. Terminal A: `pnpm -w --filter @ai-email/api dev 2>&1 | tee /tmp/ai-email-api.log`
+8. Terminal B: `pnpm -w --filter @ai-email/worker dev 2>&1 | tee /tmp/ai-email-worker.log`
+9. Terminal C: `pnpm -w smoke:correlation 2>&1 | tee /tmp/ai-email-smoke.log`
+10. Terminal C:
+    `CID="$(perl -ne 'if(/correlationId=([A-Za-z0-9_-]+)/){print $1; exit}' /tmp/ai-email-smoke.log)"`
+11. Terminal C:
+    `echo "CID=$CID"`
+12. Terminal C:
+    `rg "$CID" /tmp/ai-email-api.log`
+13. Terminal C:
+    `rg -a "$CID" /tmp/ai-email-worker.log`
 
 DB note:
 - `DATABASE_URL` must point to a reachable Postgres with migrations applied.

@@ -19,7 +19,8 @@
     "dev:infra:reset": "docker compose down -v",
     "db:migrate": "pnpm --filter @ai-email/db db:migrate",
     "db:rollback": "pnpm --filter @ai-email/db db:rollback",
-    "db:create": "pnpm --filter @ai-email/db db:create"
+    "db:create": "pnpm --filter @ai-email/db db:create",
+    "db:setup": "node ./scripts/dev-db.mjs"
   },
   "devDependencies": {
     "@ai-email/shared": "workspace:*",
