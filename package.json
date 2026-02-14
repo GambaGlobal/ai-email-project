@@ -13,6 +13,7 @@
     "queue:is-paused": "ACTION=is-paused node ./scripts/queue-control.mjs",
     "failures:list": "node ./scripts/failures-list.mjs",
     "failures:show": "node ./scripts/failures-show.mjs",
+    "ops:triage": "node ./scripts/ops-triage.mjs",
     "kill-switch:set": "node ./scripts/kill-switch-set.mjs",
     "dev:up": "node ./scripts/dev-up.mjs",
     "dev:down": "node ./scripts/dev-down.mjs",

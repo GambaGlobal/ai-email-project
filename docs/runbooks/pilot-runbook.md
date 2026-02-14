@@ -225,6 +225,28 @@ Use operator commands first to find what failed and why (tenant-scoped, read-onl
 - Filter by correlation: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" CORRELATION_ID="<cid>" pnpm -w failures:list`
 - Show one failure by job id: `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" JOB_ID="<job-id>" pnpm -w failures:show`
 
+### Triage (one command)
+Use this read-only snapshot command during incidents to answer kill switch, queue, and recent failure state for one tenant.
+
+Default command:
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w ops:triage`
+
+Filter by correlation id:
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" CORRELATION_ID="<cid>" pnpm -w ops:triage`
+
+What good output looks like:
+- `ops.triage.killSwitch.global` shows `disabled=false`.
+- `ops.triage.killSwitch.tenant` shows `status=not_set` or `isEnabled=false`.
+- `ops.triage.queue.isPaused` shows `isPaused=false`.
+- `ops.triage.queue.counts` shows bounded `waiting/active/failed/delayed`.
+- `ops.triage.failures.count` is stable and samples are explainable.
+- Final line is `OK ops:triage ...`.
+
+Where to look next if not healthy:
+- Queue control: `pnpm -w queue:pause`, `pnpm -w queue:resume`, `pnpm -w queue:is-paused`
+- Kill switch control: `pnpm -w kill-switch:set` (safe-by-default dry-run unless confirm is set)
+- Failure detail: `pnpm -w failures:list`, `pnpm -w failures:show`
+
 Operator decision guide:
 - `errorClass=TRANSIENT`: watch `queue:status`, verify dependencies, and allow normal retries/replay path.
 - `errorClass=PERMANENT`: enable kill switch, fix root cause, then use `queue:replay` with strict filters to recover safely.
