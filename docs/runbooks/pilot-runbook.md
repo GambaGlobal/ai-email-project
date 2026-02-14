@@ -145,10 +145,17 @@ Useful overrides:
 
 Log hygiene and readiness behavior:
 - By default, `dev:up` truncates `AI_EMAIL_API_LOG` and `AI_EMAIL_WORKER_LOG` before launching API/worker to avoid stale incident/smoke IDs.
+- At startup, `dev:up` best-effort cleans stale `.tmp/dev-processes.json` process state before launching new processes.
+- `dev:up` now deterministically owns port `3001`: it attempts `SIGTERM`, then `SIGKILL` for existing listeners, and re-checks before booting API.
 - `dev:up` blocks on API `/healthz` readiness and fails fast with:
   `FAIL dev:up api-not-ready timeoutMs=<...>`
   plus last API log lines when the timeout is exceeded.
 - Worker readiness is soft-gated: if not ready in time, `dev:up` prints a warning and continues.
+
+If `dev:up` cannot reclaim `:3001`, it exits non-zero with PID diagnostics and manual fallback commands:
+1. `lsof -nP -iTCP:3001 -sTCP:LISTEN`
+2. `kill <pid1> <pid2> ...`
+3. `kill -9 <pid1> <pid2> ...`
 
 ## Retry + Error Taxonomy (v1)
 Shared defaults (single source of truth in `@ai-email/shared`):

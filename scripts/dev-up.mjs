@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import { EOL } from "node:os";
@@ -17,6 +17,7 @@ const defaults = {
 };
 
 const stateFilePath = ".tmp/dev-processes.json";
+const apiPort = 3001;
 const env = { ...process.env };
 for (const [key, value] of Object.entries(defaults)) {
   if (!env[key]) {
@@ -29,7 +30,7 @@ const workerLogPath = env.AI_EMAIL_WORKER_LOG;
 const keepLogs = env.KEEP_LOGS === "1";
 const apiReadyTimeoutMs = Number.parseInt(env.DEV_UP_TIMEOUT_MS ?? "20000", 10);
 const workerReadyTimeoutMs = Number.parseInt(env.WORKER_READY_TIMEOUT_MS ?? "10000", 10);
-const apiHealthUrl = "http://127.0.0.1:3001/healthz";
+const apiHealthUrl = `http://127.0.0.1:${apiPort}/healthz`;
 
 let apiChild;
 let workerChild;
@@ -89,29 +90,114 @@ async function ensurePidStopped(pid) {
   }
 }
 
-async function freePort3001() {
-  const result = await runCommand("lsof", ["-ti", "tcp:3001"]);
+async function listPortListeners(port) {
+  const result = await runCommand("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
   if (!result.ok && result.stdout.trim().length === 0) {
-    return;
+    return [];
   }
-  const pids = result.stdout
-    .split(/\r?\n/)
-    .map((line) => Number(line.trim()))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const killed = [];
-  const failed = [];
-  for (const pid of pids) {
-    if (await killPid(pid, "SIGKILL")) {
-      killed.push(pid);
-    } else {
-      failed.push(pid);
+
+  const listenersByPid = new Map();
+  let currentPid = null;
+  const lines = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (line.startsWith("p")) {
+      const pid = Number(line.slice(1));
+      if (Number.isFinite(pid) && pid > 0) {
+        currentPid = pid;
+        listenersByPid.set(pid, listenersByPid.get(pid) ?? { pid, command: null });
+      } else {
+        currentPid = null;
+      }
+      continue;
+    }
+    if (line.startsWith("c") && currentPid !== null && listenersByPid.has(currentPid)) {
+      listenersByPid.set(currentPid, {
+        pid: currentPid,
+        command: line.slice(1) || null
+      });
     }
   }
-  if (killed.length > 0) {
-    console.log(`dev:up: freed tcp:3001 by killing pid(s): ${killed.join(", ")}`);
+
+  return [...listenersByPid.values()].sort((a, b) => a.pid - b.pid);
+}
+
+async function waitForPortToClear(port, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const listeners = await listPortListeners(port);
+    if (listeners.length === 0) {
+      return [];
+    }
+    await wait(250);
   }
-  if (failed.length > 0) {
-    console.log(`dev:up: unable to kill pid(s) on tcp:3001: ${failed.join(", ")}`);
+  return listPortListeners(port);
+}
+
+async function reclaimPortOrFail(port) {
+  const initialListeners = await listPortListeners(port);
+  if (initialListeners.length === 0) {
+    return;
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "dev.up.port.in_use",
+      port,
+      pids: initialListeners.map((listener) => listener.pid)
+    })
+  );
+
+  for (const listener of initialListeners) {
+    await killPid(listener.pid, "SIGTERM");
+  }
+
+  let remainingListeners = await waitForPortToClear(port, 2000);
+  if (remainingListeners.length > 0) {
+    for (const listener of remainingListeners) {
+      await killPid(listener.pid, "SIGKILL");
+    }
+    remainingListeners = await waitForPortToClear(port, 2000);
+  }
+
+  if (remainingListeners.length === 0) {
+    return;
+  }
+
+  const remainingPids = remainingListeners.map((listener) => listener.pid);
+  const listenerSummary = remainingListeners
+    .map((listener) => `${listener.pid}:${listener.command ?? "unknown"}`)
+    .join(",");
+  console.log(`FAIL dev:up port-in-use port=${port} pids=${remainingPids.join(",")}`);
+  console.log(`dev:up: listeners=${listenerSummary}`);
+  console.log(`dev:up: run -> lsof -nP -iTCP:${port} -sTCP:LISTEN`);
+  console.log(`dev:up: run -> kill ${remainingPids.join(" ")}`);
+  console.log(`dev:up: run -> kill -9 ${remainingPids.join(" ")}`);
+  process.exit(1);
+}
+
+async function cleanupStartupStateFile() {
+  let state;
+  try {
+    const raw = await readFile(stateFilePath, "utf8");
+    state = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  console.log(`dev:up: found existing state file at ${stateFilePath}, attempting cleanup`);
+
+  const trackedApiPid = Number(state?.apiPid);
+  const trackedWorkerPid = Number(state?.workerPid);
+  const trackedPids = [trackedApiPid, trackedWorkerPid].filter((pid) => Number.isFinite(pid) && pid > 0);
+  for (const pid of trackedPids) {
+    await ensurePidStopped(pid);
+  }
+
+  try {
+    await rm(stateFilePath, { force: true });
+    console.log(`dev:up: removed stale state file ${stateFilePath}`);
+  } catch {
+    console.log(`dev:up: unable to remove stale state file ${stateFilePath} (continuing)`);
   }
 }
 
@@ -251,7 +337,8 @@ if (brewCheck.ok) {
   }
 }
 
-await freePort3001();
+await cleanupStartupStateFile();
+await reclaimPortOrFail(apiPort);
 await mkdir(".tmp", { recursive: true });
 await mkdir(dirname(apiLogPath), { recursive: true });
 await mkdir(dirname(workerLogPath), { recursive: true });
@@ -355,7 +442,7 @@ if (!workerReady) {
 }
 
 console.log(
-  `OK dev:up ready apiUrl=http://127.0.0.1:3001 healthz=200 apiLog=${apiLogPath} workerLog=${workerLogPath} keepLogs=${
+  `OK dev:up ready apiUrl=http://127.0.0.1:${apiPort} healthz=200 apiLog=${apiLogPath} workerLog=${workerLogPath} keepLogs=${
     keepLogs ? 1 : 0
   }`
 );
