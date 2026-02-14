@@ -223,6 +223,23 @@ After replay:
 - `queue:replay` remains safe with deterministic job ids; use `failures:list` / `failures:show` for root-cause inspection before replaying.
 - Manual retry check (after doc is done): `curl -sS -X POST -H "x-tenant-id: <tenant-id>" "http://127.0.0.1:3001/v1/docs/<docId>/retry"`
 
+### Unstick docs ingestion (stuck processing)
+Use this when docs stay in `processing` after worker crashes/restarts and never progress.
+
+Default dry run (safe by default):
+- `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" THRESHOLD_MINUTES="60" pnpm -w docs:unstick`
+
+Confirm/apply:
+- `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" THRESHOLD_MINUTES="60" DOCS_UNSTICK_CONFIRM=1 pnpm -w docs:unstick`
+
+Notes:
+- Defaults move stuck docs to `failed` (safer for operator review and explicit replay). Use `SET_STATUS=queued` only when intentionally re-queueing without replay.
+- Follow-up checks: `pnpm -w ops:triage`, `pnpm -w failures:list`, `pnpm -w queue:status`.
+- Recovery options after unstick:
+  - `SET_STATUS=failed`: use `pnpm -w queue:replay` (with filters) or doc retry endpoint per doc id.
+  - `SET_STATUS=queued`: worker can pick up work directly once queue/job state permits.
+- Prefer this command-first path; use direct SQL only if command execution is unavailable.
+
 ### Queue status (read-only)
 Use this command for a deterministic queue snapshot (counts + active + recent failed samples):
 - `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:status`
