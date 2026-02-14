@@ -216,6 +216,13 @@ After replay:
   - `rg -a "<correlationId>" /tmp/ai-email-worker.log`
 - Re-run `pnpm -w smoke:correlation` for end-to-end sanity if needed.
 
+### Idempotency and de-dupe (docs ingestion)
+- Docs ingestion queue job id is deterministic by doc id: `docs_ingestion-<docId>`.
+- API retry endpoint rejects already-ingested docs (`ingestion_status=done`) with deterministic client error (`Doc already ingested`) and does not enqueue new work.
+- Worker short-circuits duplicate work: if a doc is already `processing`, `done`, or `ignored`, it emits `job.ignored` and exits successfully without side effects.
+- `queue:replay` remains safe with deterministic job ids; use `failures:list` / `failures:show` for root-cause inspection before replaying.
+- Manual retry check (after doc is done): `curl -sS -X POST -H "x-tenant-id: <tenant-id>" "http://127.0.0.1:3001/v1/docs/<docId>/retry"`
+
 ### Queue status (read-only)
 Use this command for a deterministic queue snapshot (counts + active + recent failed samples):
 - `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:status`

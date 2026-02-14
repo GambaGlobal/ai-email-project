@@ -341,6 +341,8 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
               size_bytes,
               category,
               status,
+              ingestion_status,
+              ingestion_status_updated_at,
               storage_provider,
               storage_key,
               storage_uri,
@@ -357,6 +359,8 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
               $4,
               $5,
               'queued',
+              'queued',
+              now(),
               $6,
               $7,
               $8,
@@ -429,7 +433,8 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
           correlationId: queued.correlationId,
           tenantId,
           queueName,
-          jobId: queued.jobId
+          jobId: queued.jobId,
+          reused: queued.reused
         })
       );
     } catch (error) {
@@ -641,30 +646,87 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const retried = await withTenantClient(tenantId, async (client) => {
-        const updated = await queryOne(
+        const existing = await queryOne(
           client,
           `
-            UPDATE docs
-            SET
-              status = 'queued',
-              error_message = NULL,
-              indexed_at = NULL,
-              updated_at = now()
+            SELECT
+              id,
+              filename,
+              size_bytes,
+              category,
+              status,
+              ingestion_status,
+              error_message,
+              indexed_at,
+              created_at,
+              updated_at,
+              storage_key
+            FROM docs
             WHERE tenant_id = $1
               AND id = $2
-            RETURNING id, filename, size_bytes, category, status, error_message, indexed_at, created_at, updated_at, storage_key
           `,
           [tenantId, request.params.id]
         );
+        if (!existing) {
+          return null;
+        }
 
-        return updated;
+        const ingestionStatus = String(existing.ingestion_status ?? "queued");
+        if (ingestionStatus === "done") {
+          return { mode: "done" as const, row: existing };
+        }
+
+        if (ingestionStatus === "failed" || ingestionStatus === "queued" || ingestionStatus === "ignored") {
+          const updated = await queryOne(
+            client,
+            `
+              UPDATE docs
+              SET
+                status = 'queued',
+                ingestion_status = 'queued',
+                ingestion_status_updated_at = now(),
+                error_message = NULL,
+                indexed_at = NULL,
+                updated_at = now()
+              WHERE tenant_id = $1
+                AND id = $2
+              RETURNING id, filename, size_bytes, category, status, ingestion_status, error_message, indexed_at, created_at, updated_at, storage_key
+            `,
+            [tenantId, request.params.id]
+          );
+          if (updated) {
+            return { mode: "updated" as const, row: updated };
+          }
+        }
+
+        return { mode: "existing" as const, row: existing };
       });
 
       if (!retried) {
         return reply.code(404).send({ error: "Document not found" });
       }
 
-      const storageKey = typeof retried.storage_key === "string" ? retried.storage_key : null;
+      if (retried.mode === "done") {
+        const rejection = {
+          event: "notification.retry.rejected",
+          reason: "already_ingested",
+          correlationId,
+          tenantId,
+          queueName,
+          docId: request.params.id,
+          ingestionStatus: "done"
+        };
+        // eslint-disable-next-line no-console
+        console.log(JSON.stringify(rejection));
+        request.log.info(rejection, "Docs retry rejected for already ingested doc");
+        return reply.code(409).send({
+          error: "Doc already ingested",
+          docId: request.params.id,
+          status: "done"
+        });
+      }
+
+      const storageKey = typeof retried.row.storage_key === "string" ? retried.row.storage_key : null;
       if (!storageKey) {
         request.log.error({ docId: request.params.id }, "Retry missing storage key");
         return reply.code(500).send({ error: "Document storage pointer missing" });
@@ -683,10 +745,10 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         provider: "other",
         stage,
         correlationId,
-        docId: String(retried.id),
+        docId: String(retried.row.id),
         bucket: resolveDocsBucket(),
         storageKey,
-        category: String(retried.category)
+        category: String(retried.row.category)
       });
 
       request.log.info(
@@ -701,7 +763,23 @@ const docsRoutes: FastifyPluginAsync = async (app) => {
         "Docs retry notification enqueued"
       );
 
-      return reply.send(toDocRecord(retried));
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "notification.enqueued",
+          correlationId: queued.correlationId,
+          tenantId,
+          queueName,
+          jobId: queued.jobId,
+          reused: queued.reused
+        })
+      );
+
+      return reply.send({
+        ...toDocRecord(retried.row),
+        jobId: queued.jobId,
+        reused: queued.reused
+      });
     } catch (error) {
       request.log.error({ error }, "Failed to retry doc ingestion");
       return reply.code(500).send({ error: "Unable to retry doc ingestion" });

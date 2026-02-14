@@ -96,6 +96,81 @@ async function getTenantKillSwitchState(tenantId: string, key: string) {
   });
 }
 
+type IngestionTransitionResult =
+  | { mode: "started" }
+  | { mode: "noop"; reason: "already_processing" | "already_done" | "ignored" | "doc_not_found" | "unknown" };
+
+async function beginDocIngestionTransition(tenantId: string, docId: string): Promise<IngestionTransitionResult> {
+  return withTenantClient(tenantId, async (client) => {
+    const updated = await client.query(
+      `
+        UPDATE docs
+        SET
+          status = 'indexing',
+          ingestion_status = 'processing',
+          ingestion_status_updated_at = now(),
+          error_message = NULL,
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND id = $2
+          AND ingestion_status IN ('queued', 'failed')
+        RETURNING id
+      `,
+      [tenantId, docId]
+    );
+    if ((updated.rowCount ?? 0) > 0) {
+      return { mode: "started" };
+    }
+
+    const current = await client.query(
+      `
+        SELECT ingestion_status
+        FROM docs
+        WHERE tenant_id = $1
+          AND id = $2
+        LIMIT 1
+      `,
+      [tenantId, docId]
+    );
+    const row = current.rows[0] as { ingestion_status?: unknown } | undefined;
+    const status = typeof row?.ingestion_status === "string" ? row.ingestion_status : null;
+
+    if (!status) {
+      return { mode: "noop", reason: "doc_not_found" };
+    }
+    if (status === "processing") {
+      return { mode: "noop", reason: "already_processing" };
+    }
+    if (status === "done") {
+      return { mode: "noop", reason: "already_done" };
+    }
+    if (status === "ignored") {
+      return { mode: "noop", reason: "ignored" };
+    }
+
+    return { mode: "noop", reason: "unknown" };
+  });
+}
+
+async function markDocIgnored(tenantId: string, docId: string, reason: string) {
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        UPDATE docs
+        SET
+          status = 'failed',
+          ingestion_status = 'ignored',
+          ingestion_status_updated_at = now(),
+          error_message = LEFT($3, 500),
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND id = $2
+      `,
+      [tenantId, docId, reason]
+    );
+  });
+}
+
 const ingestionWorker = new Worker<DocsIngestionJob>(
   docsQueueName,
   async (job) => {
@@ -130,7 +205,37 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       )
     );
 
+    const transition = await beginDocIngestionTransition(tenantId, docId);
+    if (transition.mode === "noop") {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "job.ignored",
+          reason: transition.reason,
+          correlationId,
+          tenantId,
+          queueName: job.queueName,
+          jobId: job.id?.toString(),
+          attempt,
+          maxAttempts
+        })
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
+          })
+        )
+      );
+      return;
+    }
+
     if (isGlobalDocsIngestionDisabled(process.env)) {
+      await markDocIgnored(tenantId, docId, "Docs ingestion disabled by global kill switch");
       // eslint-disable-next-line no-console
       console.log(
         JSON.stringify({
@@ -161,6 +266,13 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
 
     const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_DOCS_INGESTION);
     if (tenantKillSwitch.isEnabled) {
+      await markDocIgnored(
+        tenantId,
+        docId,
+        tenantKillSwitch.reason
+          ? `Docs ingestion disabled by tenant kill switch: ${tenantKillSwitch.reason}`
+          : "Docs ingestion disabled by tenant kill switch"
+      );
       // eslint-disable-next-line no-console
       console.log(
         JSON.stringify({
@@ -190,21 +302,6 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
       return;
     }
 
-    await withTenantClient(tenantId, async (client) => {
-      await client.query(
-        `
-          UPDATE docs
-          SET
-            status = 'indexing',
-            error_message = NULL,
-            updated_at = now()
-          WHERE tenant_id = $1
-            AND id = $2
-        `,
-        [tenantId, docId]
-      );
-    });
-
     try {
       // Phase 9.7 minimal ingestion hook:
       // real parse/chunk/embed/index pipeline wiring remains in later steps.
@@ -216,6 +313,9 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
             UPDATE docs
             SET
               status = 'ready',
+              ingestion_status = 'done',
+              ingestion_status_updated_at = now(),
+              ingested_at = now(),
               error_message = NULL,
               indexed_at = now(),
               updated_at = now()
@@ -298,6 +398,8 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
             UPDATE docs
             SET
               status = 'failed',
+              ingestion_status = 'failed',
+              ingestion_status_updated_at = now(),
               error_message = LEFT($3, 500),
               updated_at = now()
             WHERE tenant_id = $1

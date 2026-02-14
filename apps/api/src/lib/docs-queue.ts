@@ -3,6 +3,7 @@ import IORedis from "ioredis";
 import {
   DEFAULT_BULLMQ_JOB_OPTIONS,
   asCorrelationId,
+  docsIngestionJobId,
   newCorrelationId,
   type CorrelationId
 } from "@ai-email/shared";
@@ -61,20 +62,34 @@ function getQueue(): Queue<DocsIngestionJob> {
 export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
   jobId: string | undefined;
   correlationId: CorrelationId;
+  reused: boolean;
 }> {
   const ingestionQueue = getQueue();
   const correlationId =
     typeof job.correlationId === "string" ? asCorrelationId(job.correlationId) : newCorrelationId();
+  const deterministicJobId = docsIngestionJobId(job.docId);
+  const existingJob = await ingestionQueue.getJob(deterministicJobId);
+  if (existingJob) {
+    return {
+      jobId: existingJob.id?.toString(),
+      correlationId,
+      reused: true
+    };
+  }
+
   const jobWithCorrelation: DocsIngestionJob = {
     ...job,
     correlationId
   };
 
-  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation);
+  const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation, {
+    jobId: deterministicJobId
+  });
 
   return {
     jobId: queuedJob.id?.toString(),
-    correlationId
+    correlationId,
+    reused: false
   };
 }
 
