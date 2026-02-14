@@ -130,13 +130,25 @@ Expected worker match example:
 ## One-command local dev
 Use this for a single-command bring-up/tear-down loop:
 1. `pnpm -w dev:up`
-2. In a new terminal: `pnpm -w smoke:correlation`
-3. Stop with Ctrl+C in the `dev:up` terminal, or run `pnpm -w dev:down`
+2. Wait for the exact ready line:
+   `OK dev:up ready apiUrl=http://127.0.0.1:3001 healthz=200 apiLog=... workerLog=... keepLogs=...`
+3. In a new terminal: `pnpm -w smoke:correlation`
+4. Stop with Ctrl+C in the `dev:up` terminal, or run `pnpm -w dev:down`
 
 Useful overrides:
 - `AI_EMAIL_API_LOG` and `AI_EMAIL_WORKER_LOG` to change default log files.
+- `KEEP_LOGS=1` to preserve existing log content (default behavior truncates logs on `dev:up` start).
+- `DEV_UP_TIMEOUT_MS` to change API readiness timeout (default `20000`).
+- `WORKER_READY_TIMEOUT_MS` to change worker readiness soft timeout (default `10000`).
 - `SMOKE_LOG_TIMEOUT_MS` to extend/reduce smoke log polling timeout.
 - `SKIP_DB_SETUP=1` to skip DB bootstrap when your DB is already ready.
+
+Log hygiene and readiness behavior:
+- By default, `dev:up` truncates `AI_EMAIL_API_LOG` and `AI_EMAIL_WORKER_LOG` before launching API/worker to avoid stale incident/smoke IDs.
+- `dev:up` blocks on API `/healthz` readiness and fails fast with:
+  `FAIL dev:up api-not-ready timeoutMs=<...>`
+  plus last API log lines when the timeout is exceeded.
+- Worker readiness is soft-gated: if not ready in time, `dev:up` prints a warning and continues.
 
 ## Retry + Error Taxonomy (v1)
 Shared defaults (single source of truth in `@ai-email/shared`):

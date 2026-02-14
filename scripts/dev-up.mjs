@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import { EOL } from "node:os";
+import { dirname } from "node:path";
 
 const defaults = {
   REDIS_URL: "redis://127.0.0.1:6379",
@@ -23,10 +26,16 @@ for (const [key, value] of Object.entries(defaults)) {
 
 const apiLogPath = env.AI_EMAIL_API_LOG;
 const workerLogPath = env.AI_EMAIL_WORKER_LOG;
+const keepLogs = env.KEEP_LOGS === "1";
+const apiReadyTimeoutMs = Number.parseInt(env.DEV_UP_TIMEOUT_MS ?? "20000", 10);
+const workerReadyTimeoutMs = Number.parseInt(env.WORKER_READY_TIMEOUT_MS ?? "10000", 10);
+const apiHealthUrl = "http://127.0.0.1:3001/healthz";
 
 let apiChild;
 let workerChild;
 let shuttingDown = false;
+let apiReadySignal = false;
+let workerReadySignal = false;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,7 +115,7 @@ async function freePort3001() {
   }
 }
 
-function pipeWithPrefix(prefix, stream, logStream) {
+function pipeWithPrefix(prefix, stream, logStream, onLine) {
   let pending = "";
   stream.on("data", (chunk) => {
     logStream.write(chunk);
@@ -116,12 +125,18 @@ function pipeWithPrefix(prefix, stream, logStream) {
     pending = parts.pop() ?? "";
     for (const line of parts) {
       if (line.length > 0) {
+        if (onLine) {
+          onLine(line);
+        }
         process.stdout.write(`[${prefix}] ${line}${EOL}`);
       }
     }
   });
   stream.on("end", () => {
     if (pending.length > 0) {
+      if (onLine) {
+        onLine(pending);
+      }
       process.stdout.write(`[${prefix}] ${pending}${EOL}`);
     }
   });
@@ -139,6 +154,91 @@ async function shutdown(reason, exitCode) {
   process.exit(exitCode);
 }
 
+async function fetchHttpStatus(urlValue) {
+  const target = new URL(urlValue);
+  const client = target.protocol === "https:" ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const req = client.request(
+      target,
+      {
+        method: "GET",
+        timeout: 2000
+      },
+      (res) => {
+        const statusCode = res.statusCode ?? 0;
+        res.resume();
+        resolve(statusCode);
+      }
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("request timeout"));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function waitForApiReady(urlValue, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const status = await fetchHttpStatus(urlValue);
+      if (status === 200 && apiReadySignal) {
+        return status;
+      }
+    } catch {
+      // continue polling
+    }
+    await wait(250);
+  }
+  return null;
+}
+
+async function waitForWorkerReady(timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (workerReadySignal) {
+      return true;
+    }
+    await wait(250);
+  }
+  return false;
+}
+
+async function printApiLogTail(logPath, lineCount) {
+  try {
+    const content = await readFile(logPath, "utf8");
+    const lines = content.split(/\r?\n/).filter((line) => line.length > 0);
+    const tail = lines.slice(-lineCount);
+    if (tail.length === 0) {
+      console.log(`dev:up: api log is empty (${logPath})`);
+      return;
+    }
+    console.log(`dev:up: last ${tail.length} api log lines (${logPath})`);
+    for (const line of tail) {
+      console.log(line);
+    }
+  } catch {
+    console.log(`dev:up: api log missing/unreadable (${logPath})`);
+  }
+}
+
+if (!Number.isInteger(apiReadyTimeoutMs) || apiReadyTimeoutMs < 1000 || apiReadyTimeoutMs > 300000) {
+  console.error("dev:up: DEV_UP_TIMEOUT_MS must be an integer 1000..300000");
+  process.exit(1);
+}
+
+if (
+  !Number.isInteger(workerReadyTimeoutMs) ||
+  workerReadyTimeoutMs < 1000 ||
+  workerReadyTimeoutMs > 300000
+) {
+  console.error("dev:up: WORKER_READY_TIMEOUT_MS must be an integer 1000..300000");
+  process.exit(1);
+}
+
 const brewCheck = await runCommand("brew", ["--version"]);
 if (brewCheck.ok) {
   const redisStart = await runCommand("brew", ["services", "start", "redis"]);
@@ -153,6 +253,19 @@ if (brewCheck.ok) {
 
 await freePort3001();
 await mkdir(".tmp", { recursive: true });
+await mkdir(dirname(apiLogPath), { recursive: true });
+await mkdir(dirname(workerLogPath), { recursive: true });
+
+if (!keepLogs) {
+  await writeFile(apiLogPath, "");
+  await writeFile(workerLogPath, "");
+}
+
+console.log(
+  `dev:up: logs api=${apiLogPath} worker=${workerLogPath} keepLogs=${keepLogs ? 1 : 0} truncated=${
+    keepLogs ? 0 : 1
+  }`
+);
 
 if (env.SKIP_DB_SETUP !== "1") {
   console.log("dev:up: running db bootstrap (pnpm -w db:setup)");
@@ -177,10 +290,26 @@ workerChild = spawn("pnpm", ["-w", "--filter", "@ai-email/worker", "dev"], {
   stdio: ["ignore", "pipe", "pipe"]
 });
 
-pipeWithPrefix("api", apiChild.stdout, apiLogStream);
-pipeWithPrefix("api", apiChild.stderr, apiLogStream);
-pipeWithPrefix("worker", workerChild.stdout, workerLogStream);
-pipeWithPrefix("worker", workerChild.stderr, workerLogStream);
+pipeWithPrefix("api", apiChild.stdout, apiLogStream, (line) => {
+  if (/api ready on/i.test(line)) {
+    apiReadySignal = true;
+  }
+});
+pipeWithPrefix("api", apiChild.stderr, apiLogStream, (line) => {
+  if (/api ready on/i.test(line)) {
+    apiReadySignal = true;
+  }
+});
+pipeWithPrefix("worker", workerChild.stdout, workerLogStream, (line) => {
+  if (/worker ready/i.test(line)) {
+    workerReadySignal = true;
+  }
+});
+pipeWithPrefix("worker", workerChild.stderr, workerLogStream, (line) => {
+  if (/worker ready/i.test(line)) {
+    workerReadySignal = true;
+  }
+});
 
 await writeFile(
   stateFilePath,
@@ -211,6 +340,25 @@ workerChild.on("exit", (code, signal) => {
     void shutdown(`worker exited (code=${code ?? "null"} signal=${signal ?? "null"})`, 1);
   }
 });
+
+const workerReadyPromise = waitForWorkerReady(workerReadyTimeoutMs);
+const apiStatus = await waitForApiReady(apiHealthUrl, apiReadyTimeoutMs);
+if (apiStatus !== 200) {
+  console.log(`FAIL dev:up api-not-ready timeoutMs=${apiReadyTimeoutMs}`);
+  await printApiLogTail(apiLogPath, 50);
+  await shutdown("api-not-ready", 1);
+}
+
+const workerReady = await workerReadyPromise;
+if (!workerReady) {
+  console.log(`WARN dev:up worker-not-ready timeoutMs=${workerReadyTimeoutMs} (continuing)`);
+}
+
+console.log(
+  `OK dev:up ready apiUrl=http://127.0.0.1:3001 healthz=200 apiLog=${apiLogPath} workerLog=${workerLogPath} keepLogs=${
+    keepLogs ? 1 : 0
+  }`
+);
 
 process.on("SIGINT", () => {
   void shutdown("SIGINT", 0);
