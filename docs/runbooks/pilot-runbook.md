@@ -240,6 +240,31 @@ Notes:
   - `SET_STATUS=queued`: worker can pick up work directly once queue/job state permits.
 - Prefer this command-first path; use direct SQL only if command execution is unavailable.
 
+### Monitoring & alert thresholds (v1)
+Use one command to get a deterministic operator snapshot (kill switches, queue, ingestion-window health, stuck processing, and failures):
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w ops:monitor`
+
+Threshold overrides (example):
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" WINDOW_MINUTES=30 STUCK_THRESHOLD_MINUTES=90 WARN_WAITING=25 ALERT_WAITING=100 WARN_FAILED_RATE=0.05 ALERT_FAILED_RATE=0.15 pnpm -w ops:monitor`
+
+Default v1 thresholds:
+- Queue paused: `ALERT`
+- Stuck processing docs: `WARN >= 1`, `ALERT >= 5`
+- Failed rate (`failed / max(1, failed+done)`) in window: `WARN >= 0.10`, `ALERT >= 0.20`
+- Queue waiting backlog: `WARN >= 50`, `ALERT >= 200`
+
+If `ALERT`, do these first:
+1. `pnpm -w ops:triage`
+2. `pnpm -w queue:is-paused` and `pnpm -w queue:resume` (if safe)
+3. `pnpm -w kill-switch:set` (if controlled stop is needed)
+4. `pnpm -w docs:unstick` (dry-run first, then `DOCS_UNSTICK_CONFIRM=1`)
+5. `pnpm -w queue:replay` (dry-run first, then `REPLAY_CONFIRM=1`)
+
+Exit codes:
+- `0` for `OK` and `WARN`
+- `2` for `ALERT` (automation-friendly)
+- `1` for validation/connection/unexpected errors
+
 ### Queue status (read-only)
 Use this command for a deterministic queue snapshot (counts + active + recent failed samples):
 - `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:status`

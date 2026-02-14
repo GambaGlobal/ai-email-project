@@ -14,6 +14,7 @@
     "failures:list": "node ./scripts/failures-list.mjs",
     "failures:show": "node ./scripts/failures-show.mjs",
     "ops:triage": "node ./scripts/ops-triage.mjs",
+    "ops:monitor": "node ./scripts/ops-monitor.mjs",
     "docs:unstick": "node ./scripts/docs-unstick.mjs",
     "kill-switch:set": "node ./scripts/kill-switch-set.mjs",
     "dev:up": "node ./scripts/dev-up.mjs",
