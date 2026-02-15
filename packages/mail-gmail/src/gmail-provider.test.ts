@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Cursor, MailboxId, MailProviderContext } from "@ai-email/shared";
+import type { Cursor, MailboxId, MailProviderContext, ThreadId } from "@ai-email/shared";
 import { GmailProvider } from "./gmail-provider";
 import { GmailHistoryExpiredError } from "./errors";
 
@@ -62,6 +62,9 @@ test("GmailProvider.listChanges paginates, dedupes, sorts, and returns next curs
       },
       async getProfile() {
         return { historyId: "0" };
+      },
+      async getThread() {
+        return { id: "thread-0", messages: [] };
       }
     }
   });
@@ -91,6 +94,9 @@ test("GmailProvider.listChanges maps history expired into typed error", async ()
       },
       async getProfile() {
         return { historyId: "0" };
+      },
+      async getThread() {
+        return { id: "thread-0", messages: [] };
       }
     }
   });
@@ -103,5 +109,87 @@ test("GmailProvider.listChanges maps history expired into typed error", async ()
       assert.equal(error.userId, "me");
       return true;
     }
+  );
+});
+
+test("GmailProvider.getThread normalizes ordering, addresses, and body extraction", async () => {
+  const provider = new GmailProvider({
+    apiClient: {
+      async listHistory() {
+        return { historyId: "0", history: [] };
+      },
+      async getProfile() {
+        return { historyId: "0" };
+      },
+      async getThread() {
+        return {
+          id: "thread-abc",
+          messages: [
+            {
+              id: "m-2",
+              threadId: "thread-abc",
+              internalDate: "200",
+              snippet: "Second",
+              payload: {
+                headers: [
+                  { name: "Subject", value: "Trip Details" },
+                  { name: "From", value: "Guide Team <Guide@Example.com>" },
+                  { name: "To", value: "Guest One <guest@example.com>, second@example.com" },
+                  { name: "Cc", value: "Ops <ops@example.com>" }
+                ],
+                mimeType: "multipart/alternative",
+                parts: [
+                  {
+                    mimeType: "text/plain",
+                    body: {
+                      data: Buffer.from("Plain body", "utf8")
+                        .toString("base64")
+                        .replace(/\+/g, "-")
+                        .replace(/\//g, "_")
+                        .replace(/=+$/g, "")
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              id: "m-1",
+              threadId: "thread-abc",
+              internalDate: "100",
+              snippet: "First",
+              payload: {
+                headers: [
+                  { name: "From", value: "guest@example.com" },
+                  { name: "To", value: "guide@example.com" }
+                ],
+                mimeType: "text/html",
+                body: {
+                  data: Buffer.from("<p>Hello <b>team</b></p>", "utf8")
+                    .toString("base64")
+                    .replace(/\+/g, "-")
+                    .replace(/\//g, "_")
+                    .replace(/=+$/g, "")
+                }
+              }
+            }
+          ]
+        };
+      }
+    }
+  });
+
+  const response = await provider.getThread(context, { threadId: "thread-abc" as ThreadId });
+  assert.equal(response.thread.threadId, "thread-abc");
+  assert.equal(response.thread.lastUpdatedMs, 200);
+  assert.deepEqual(
+    response.thread.messages.map((message) => message.messageId),
+    ["m-1", "m-2"]
+  );
+  assert.equal(response.thread.messages[0].bodyText, "Hello team");
+  assert.equal(response.thread.messages[1].bodyText, "Plain body");
+  assert.equal(response.thread.subject, "Trip Details");
+  assert.deepEqual(
+    response.thread.participants.map((participant) => participant.email),
+    ["guest@example.com", "guide@example.com", "second@example.com", "ops@example.com"]
   );
 });

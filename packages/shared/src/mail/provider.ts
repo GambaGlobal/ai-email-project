@@ -6,7 +6,7 @@ import type {
   LabelId,
   MailBody,
   MailMessage,
-  MailThread,
+  NormalizedThread,
   MailboxId,
   MessageId,
   ThreadId
@@ -47,7 +47,7 @@ export interface GetThreadRequest {
 }
 
 export interface GetThreadResponse {
-  thread: MailThread;
+  thread: NormalizedThread;
 }
 
 export type DraftKind = "copilot_reply";

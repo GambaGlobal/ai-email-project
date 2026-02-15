@@ -6,6 +6,9 @@ import type {
   GetThreadResponse,
   MailChange,
   MessageId,
+  NormalizedAddress,
+  NormalizedMessage,
+  NormalizedThread,
   ListChangesRequest,
   ListChangesResponse,
   ModifyThreadLabelsRequest,
@@ -35,6 +38,31 @@ type GmailHistoryResponse = {
   historyId?: string;
 };
 
+type GmailThreadResponse = {
+  id?: string;
+  messages?: GmailApiMessage[];
+};
+
+type GmailApiMessage = {
+  id?: string;
+  threadId?: string;
+  internalDate?: string;
+  snippet?: string;
+  payload?: GmailMessagePart;
+};
+
+type GmailMessagePart = {
+  mimeType?: string;
+  body?: {
+    data?: string;
+  };
+  headers?: Array<{
+    name?: string;
+    value?: string;
+  }>;
+  parts?: GmailMessagePart[];
+};
+
 type GmailProfileResponse = {
   historyId?: string;
 };
@@ -53,6 +81,11 @@ type GmailApiClient = {
     accessToken: string;
     userId: string;
   }): Promise<GmailProfileResponse>;
+  getThread(input: {
+    accessToken: string;
+    userId: string;
+    threadId: string;
+  }): Promise<GmailThreadResponse>;
 };
 
 type GmailAuth = {
@@ -74,6 +107,7 @@ const DEFAULT_HISTORY_TYPES: GmailHistoryType[] = ["messageAdded", "labelAdded",
 const DEFAULT_LABEL_ID = "INBOX";
 const DEFAULT_USER_ID = "me";
 const MAX_RESULTS_PER_PAGE = 500;
+const MAX_BODY_TEXT_CHARS = 8000;
 
 const gmailApiClient: GmailApiClient = {
   async listHistory(input) {
@@ -121,6 +155,25 @@ const gmailApiClient: GmailApiClient = {
       throw error;
     }
     return parseJsonResponse<GmailProfileResponse>(bodyText);
+  },
+  async getThread(input) {
+    const url = new URL(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/threads/${encodeURIComponent(input.threadId)}`
+    );
+    url.searchParams.set("format", "full");
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`
+      }
+    });
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail threads.get failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailThreadResponse>(bodyText);
   }
 };
 
@@ -168,6 +221,173 @@ function toAuth(context: MailProviderContext): GmailAuth {
 
 function toCursor(value: string): Cursor {
   return value as Cursor;
+}
+
+function decodeBase64Url(input: string): string {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
+function normalizeWhitespace(input: string): string {
+  return input
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripHtmlTags(input: string): string {
+  return normalizeWhitespace(
+    input
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+  );
+}
+
+function collectParts(root: GmailMessagePart | undefined): GmailMessagePart[] {
+  if (!root) {
+    return [];
+  }
+  const result: GmailMessagePart[] = [root];
+  for (const child of root.parts ?? []) {
+    result.push(...collectParts(child));
+  }
+  return result;
+}
+
+function extractBodyText(payload: GmailMessagePart | undefined): {
+  bodyText?: string;
+  bodyTextTruncated?: boolean;
+} {
+  const parts = collectParts(payload);
+  const plainPart = parts.find(
+    (part) => part.mimeType?.toLowerCase().startsWith("text/plain") && !!part.body?.data
+  );
+  const htmlPart = parts.find(
+    (part) => part.mimeType?.toLowerCase().startsWith("text/html") && !!part.body?.data
+  );
+  const selected = plainPart ?? htmlPart;
+  if (!selected?.body?.data) {
+    return {};
+  }
+
+  let text = decodeBase64Url(selected.body.data);
+  if (!plainPart) {
+    text = stripHtmlTags(text);
+  } else {
+    text = normalizeWhitespace(text);
+  }
+
+  if (text.length > MAX_BODY_TEXT_CHARS) {
+    return {
+      bodyText: text.slice(0, MAX_BODY_TEXT_CHARS),
+      bodyTextTruncated: true
+    };
+  }
+  return text.length > 0 ? { bodyText: text, bodyTextTruncated: false } : {};
+}
+
+function parseHeaders(payload: GmailMessagePart | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const header of payload?.headers ?? []) {
+    const key = header.name?.trim().toLowerCase();
+    const value = header.value?.trim();
+    if (!key || !value) {
+      continue;
+    }
+    map.set(key, value);
+  }
+  return map;
+}
+
+function parseAddressEntry(value: string): NormalizedAddress | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withNameMatch = trimmed.match(/^(?:"?([^"]*)"?\s*)?<([^>]+)>$/);
+  const simpleEmailMatch = trimmed.match(/^([^<>\s,;]+@[^<>\s,;]+)$/);
+  let email: string | null = null;
+  let name: string | undefined;
+
+  if (withNameMatch) {
+    email = withNameMatch[2]?.trim().toLowerCase() ?? null;
+    const rawName = withNameMatch[1]?.trim();
+    if (rawName) {
+      name = rawName.replace(/^"|"$/g, "");
+    }
+  } else if (simpleEmailMatch) {
+    email = simpleEmailMatch[1].trim().toLowerCase();
+  }
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return null;
+  }
+  return name ? { name, email } : { email };
+}
+
+function parseAddressList(value: string | undefined): NormalizedAddress[] {
+  if (!value) {
+    return [];
+  }
+  const parsed = value
+    .split(",")
+    .map((entry) => parseAddressEntry(entry))
+    .filter((entry): entry is NormalizedAddress => !!entry);
+
+  const seen = new Set<string>();
+  const deduped: NormalizedAddress[] = [];
+  for (const address of parsed) {
+    if (seen.has(address.email)) {
+      continue;
+    }
+    seen.add(address.email);
+    deduped.push(address);
+  }
+  return deduped;
+}
+
+function toInternalDateMs(value: string | undefined): number {
+  if (!value || !/^\d+$/.test(value)) {
+    return 0;
+  }
+  return Number.parseInt(value, 10);
+}
+
+function normalizeMessage(input: GmailApiMessage): NormalizedMessage | null {
+  const messageId = input.id?.trim();
+  const threadId = input.threadId?.trim();
+  if (!messageId || !threadId) {
+    return null;
+  }
+  const headers = parseHeaders(input.payload);
+  const subject = headers.get("subject")?.trim() || undefined;
+  const from = parseAddressList(headers.get("from"))[0];
+  const to = parseAddressList(headers.get("to"));
+  const cc = parseAddressList(headers.get("cc"));
+  const body = extractBodyText(input.payload);
+
+  return {
+    messageId,
+    threadId,
+    internalDateMs: toInternalDateMs(input.internalDate),
+    subject,
+    from,
+    to,
+    cc,
+    snippet: input.snippet?.trim() || undefined,
+    bodyText: body.bodyText,
+    bodyTextTruncated: body.bodyTextTruncated
+  };
 }
 
 const notImplemented = (method: string): never => {
@@ -280,10 +500,61 @@ export class GmailProvider implements MailProvider {
   }
 
   async getThread(
-    _context: MailProviderContext,
-    _req: GetThreadRequest
+    context: MailProviderContext,
+    req: GetThreadRequest
   ): Promise<GetThreadResponse> {
-    return notImplemented("getThread");
+    const auth = toAuth(context);
+    const userId = auth.userId ?? DEFAULT_USER_ID;
+    const threadId = String(req.threadId);
+
+    const thread = await this.apiClient.getThread({
+      accessToken: auth.accessToken,
+      userId,
+      threadId
+    });
+    const messages = (thread.messages ?? [])
+      .map((message) => normalizeMessage(message))
+      .filter((message): message is NormalizedMessage => !!message)
+      .sort((left, right) => {
+        if (left.internalDateMs !== right.internalDateMs) {
+          return left.internalDateMs - right.internalDateMs;
+        }
+        return left.messageId.localeCompare(right.messageId);
+      });
+
+    const participants: NormalizedAddress[] = [];
+    const seenParticipants = new Set<string>();
+    for (const message of messages) {
+      const addresses = [
+        ...(message.from ? [message.from] : []),
+        ...message.to,
+        ...message.cc
+      ];
+      for (const address of addresses) {
+        if (seenParticipants.has(address.email)) {
+          continue;
+        }
+        seenParticipants.add(address.email);
+        participants.push(address);
+      }
+    }
+
+    const subject =
+      [...messages]
+        .reverse()
+        .map((message) => message.subject)
+        .find((value) => typeof value === "string" && value.length > 0) ?? undefined;
+    const lastUpdatedMs = messages.reduce((max, message) => Math.max(max, message.internalDateMs), 0);
+
+    const normalizedThread: NormalizedThread = {
+      threadId: thread.id?.trim() || threadId,
+      subject,
+      participants,
+      messages,
+      lastUpdatedMs
+    };
+
+    return { thread: normalizedThread };
   }
 
   async ensureLabel(

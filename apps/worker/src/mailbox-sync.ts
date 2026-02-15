@@ -1,4 +1,4 @@
-import type { Cursor, MailChange } from "@ai-email/shared";
+import type { Cursor, MailChange, NormalizedThread } from "@ai-email/shared";
 import { GmailHistoryExpiredError } from "../../../packages/mail-gmail/src/errors.js";
 
 export interface MailboxCursorStore {
@@ -17,6 +17,12 @@ export type MailboxSyncProvider = {
     mailboxId: string;
   }): Promise<string>;
 };
+
+export type NormalizedThreadFetcher = (input: {
+  tenantId: string;
+  mailboxId: string;
+  threadId: string;
+}) => Promise<NormalizedThread>;
 
 export class MemoryCursorStore implements MailboxCursorStore {
   private readonly entries = new Map<string, string>();
@@ -121,4 +127,39 @@ export async function syncMailbox(input: {
 
 export function toCursor(historyId: string): Cursor {
   return historyId as Cursor;
+}
+
+export async function collectThreadContextsForChanges(input: {
+  tenantId: string;
+  mailboxId: string;
+  changes: MailChange[];
+  fetchThread: NormalizedThreadFetcher;
+}): Promise<NormalizedThread[]> {
+  const resolveThreadId = (change: MailChange): string | null => {
+    if (change.kind === "threadLabelsChanged") {
+      return String(change.threadId);
+    }
+    if (change.kind === "messageAdded" || change.kind === "messageLabelsChanged") {
+      return String(change.threadId);
+    }
+    return null;
+  };
+
+  const threadIds = Array.from(
+    new Set(
+      input.changes
+        .map((change) => resolveThreadId(change))
+        .filter((threadId): threadId is string => typeof threadId === "string" && threadId.length > 0)
+    )
+  ).sort((left, right) => left.localeCompare(right));
+
+  return Promise.all(
+    threadIds.map((threadId) =>
+      input.fetchThread({
+        tenantId: input.tenantId,
+        mailboxId: input.mailboxId,
+        threadId
+      })
+    )
+  );
 }

@@ -5,11 +5,13 @@ import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
 import { GmailProvider } from "../../../packages/mail-gmail/src/gmail-provider.js";
 import {
+  type GetThreadRequest,
   type Cursor,
   DEFAULT_JOB_ATTEMPTS,
   ErrorClass,
   type MailboxId,
   type MailChange,
+  type NormalizedThread,
   KILL_SWITCH_DOCS_INGESTION,
   KILL_SWITCH_MAILBOX_SYNC,
   KILL_SWITCH_MAIL_NOTIFICATIONS,
@@ -20,7 +22,12 @@ import {
   type CorrelationId
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
-import { syncMailbox, type MailboxCursorStore, type MailboxSyncProvider } from "./mailbox-sync.js";
+import {
+  collectThreadContextsForChanges,
+  syncMailbox,
+  type MailboxCursorStore,
+  type MailboxSyncProvider
+} from "./mailbox-sync.js";
 
 type DocsIngestionJob = {
   tenantId: string;
@@ -360,6 +367,30 @@ class GmailMailboxSyncProvider implements MailboxSyncProvider {
       {}
     );
     return String(response.nextCursor);
+  }
+
+  async getThread(input: {
+    tenantId: string;
+    mailboxId: string;
+    threadId: string;
+  }): Promise<NormalizedThread> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    const response = await this.provider.getThread(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId
+        }
+      },
+      {
+        threadId: input.threadId as GetThreadRequest["threadId"],
+        includeBody: true
+      }
+    );
+    return response.thread;
   }
 }
 
@@ -1246,6 +1277,30 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
             commitCursor: true
           }
         });
+
+        if (process.env.MAILBOX_SYNC_FETCH_THREADS === "1") {
+          const threadContexts = await collectThreadContextsForChanges({
+            tenantId,
+            mailboxId,
+            changes: syncResult.changes,
+            fetchThread: async ({ tenantId: threadTenantId, mailboxId: threadMailboxId, threadId }) =>
+              gmailMailboxSyncProvider.getThread({
+                tenantId: threadTenantId,
+                mailboxId: threadMailboxId,
+                threadId
+              })
+          });
+          // eslint-disable-next-line no-console
+          console.log(
+            JSON.stringify({
+              event: "mailbox.sync.thread_context.ready",
+              tenantId,
+              mailboxId,
+              correlationId: mailboxRunCorrelationId,
+              threadCount: threadContexts.length
+            })
+          );
+        }
 
         const stateAfterSync = await withTenantClient(tenantId, async (client) => {
           const result = await client.query(

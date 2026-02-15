@@ -17,6 +17,15 @@ export type MailAddress = {
   email: string;
 };
 
+/**
+ * Provider-agnostic normalized address model used by triage/generation context.
+ * Determinism rule: normalized email is lowercase.
+ */
+export type NormalizedAddress = {
+  name?: string;
+  email: string;
+};
+
 export type Participants = {
   from: MailAddress;
   to: MailAddress[];
@@ -54,6 +63,38 @@ export type MailThread = {
   id: ThreadId;
   messages: MailMessage[];
   labelIds?: LabelId[];
+};
+
+/**
+ * Provider-agnostic normalized message shape for downstream triage/generation.
+ */
+export type NormalizedMessage = {
+  messageId: string;
+  threadId: string;
+  internalDateMs: number;
+  subject?: string;
+  from?: NormalizedAddress;
+  to: NormalizedAddress[];
+  cc: NormalizedAddress[];
+  snippet?: string;
+  /**
+   * Safe plain-text extraction, bounded for prompt safety.
+   */
+  bodyText?: string;
+  bodyTextTruncated?: boolean;
+};
+
+/**
+ * Deterministic normalized thread context:
+ * - messages sorted ascending by internalDateMs, tie-breaker messageId
+ * - participants deduped by lowercase email
+ */
+export type NormalizedThread = {
+  threadId: string;
+  subject?: string;
+  participants: NormalizedAddress[];
+  messages: NormalizedMessage[];
+  lastUpdatedMs: number;
 };
 
 export type CopilotDraftMarker = {
