@@ -165,6 +165,19 @@ Log debugging commands:
 - `rg -a "<CID>" /tmp/ai-email-api.log | rg -e "mail.notification.received|mail.notification.enqueued|mail.notification.deduped"`
 - `rg -a "<CID>" /tmp/ai-email-worker.log | rg -e "job.start|job.done|job.error"`
 
+## Poison protection (mail notifications)
+Worker behavior:
+- `processing_status` on `mail_notification_receipts` is durable (`received|enqueued|processing|done|failed_transient|failed_permanent|ignored`).
+- Transient worker failures persist `last_error_class='transient'` and are retried.
+- Permanent failures persist `last_error_class='permanent'` and fail fast (`UnrecoverableError`) to prevent retry storms.
+- Terminal statuses (`done`, `failed_permanent`, `ignored`) are no-op/idempotent on re-delivery.
+
+Run deterministic poison smoke:
+1. `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" pnpm -w smoke:notify-poison`
+
+Inspect durable status:
+- `psql "$DATABASE_URL" -c "SELECT id, processing_status, processing_attempts, processing_started_at, processed_at, last_error_class, last_error_at FROM mail_notification_receipts WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid ORDER BY received_at DESC LIMIT 20;"`
+
 ## Gmail notification coalescing (mailbox cursor)
 Invariants:
 - Only one `mailbox_sync` job is inflight per `(mailboxId, provider)`.

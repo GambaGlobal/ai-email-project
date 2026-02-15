@@ -377,9 +377,10 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
               provider,
               message_id,
               gmail_history_id,
-              payload
+              payload,
+              processing_status
             )
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'received')
             ON CONFLICT (tenant_id, provider, message_id) DO NOTHING
             RETURNING id::text AS id, enqueued_at::text AS enqueued_at, enqueued_job_id
           `,
@@ -442,7 +443,10 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
               SET
                 enqueued_at = now(),
                 enqueued_job_id = $3,
-                last_error = NULL
+                last_error = NULL,
+                last_error_at = NULL,
+                last_error_class = NULL,
+                processing_status = 'enqueued'
               WHERE tenant_id = $1
                 AND id = $2
             `,
@@ -460,7 +464,10 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
           await client.query(
             `
               UPDATE mail_notification_receipts
-              SET last_error = LEFT($3, 500)
+              SET last_error = LEFT($3, 1000)
+                ,last_error_at = now()
+                ,last_error_class = 'transient'
+                ,processing_status = 'failed_transient'
               WHERE tenant_id = $1
                 AND id = $2
             `,

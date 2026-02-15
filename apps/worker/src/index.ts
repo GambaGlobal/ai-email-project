@@ -50,6 +50,12 @@ type MailboxSyncJob = {
   provider?: "gmail";
 };
 
+type MailNotificationReceiptRow = {
+  id: string;
+  processing_status: string;
+  processed_at: string | null;
+};
+
 if (!process.env.REDIS_URL) {
   // eslint-disable-next-line no-console
   console.log("redis not configured, skipping queue init");
@@ -475,6 +481,10 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
       typeof job.data.correlationId === "string" && job.data.correlationId.length > 0
         ? (job.data.correlationId as CorrelationId)
         : undefined;
+    const safeTenantId =
+      typeof job.data.tenantId === "string" && job.data.tenantId.length > 0 ? job.data.tenantId : undefined;
+    const safeReceiptId =
+      typeof job.data.receiptId === "string" && job.data.receiptId.length > 0 ? job.data.receiptId : undefined;
 
     const baseLogContext = toStructuredLogContext({
       tenantId:
@@ -519,11 +529,107 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
       const messageId = assertRequiredString(job.data.messageId, "messageId");
       const receiptId = assertRequiredString(job.data.receiptId, "receiptId");
 
-      void tenantId;
-      void correlationId;
-      void messageId;
-      // No provider side-effects in this step; this worker validates and records deterministic processing skeleton.
-      void receiptId;
+      const transitionResult = await withTenantClient(tenantId, async (client) => {
+        const receiptResult = await client.query(
+          `
+            SELECT
+              id::text AS id,
+              processing_status,
+              processed_at::text AS processed_at
+            FROM mail_notification_receipts
+            WHERE tenant_id = $1
+              AND id = $2
+            FOR UPDATE
+          `,
+          [tenantId, receiptId]
+        );
+        const receipt = receiptResult.rows[0] as MailNotificationReceiptRow | undefined;
+
+        if (!receipt) {
+          throw new Error(`mail_notification_receipt missing for id=${receiptId}`);
+        }
+
+        const status = receipt.processing_status;
+        const isTerminalStatus =
+          status === "done" || status === "failed_permanent" || status === "ignored";
+
+        if (isTerminalStatus || receipt.processed_at) {
+          if (receipt.processed_at && status !== "done") {
+            await client.query(
+              `
+                UPDATE mail_notification_receipts
+                SET
+                  processing_status = 'done'
+                WHERE tenant_id = $1
+                  AND id = $2
+              `,
+              [tenantId, receiptId]
+            );
+          }
+
+          return {
+            mode: "ignored",
+            reason: receipt.processed_at ? "already_processed" : `status_${status}`
+          } as const;
+        }
+
+        await client.query(
+          `
+            UPDATE mail_notification_receipts
+            SET
+              processing_status = 'processing',
+              processing_started_at = now(),
+              processing_attempts = processing_attempts + 1,
+              last_error = NULL,
+              last_error_class = NULL,
+              last_error_at = NULL
+            WHERE tenant_id = $1
+              AND id = $2
+          `,
+          [tenantId, receiptId]
+        );
+
+        // No provider side-effects in this step; downstream behavior remains deterministic/no-op.
+        void correlationId;
+        void messageId;
+
+        await client.query(
+          `
+            UPDATE mail_notification_receipts
+            SET
+              processing_status = 'done',
+              processed_at = now(),
+              last_error = NULL,
+              last_error_class = NULL,
+              last_error_at = NULL
+            WHERE tenant_id = $1
+              AND id = $2
+          `,
+          [tenantId, receiptId]
+        );
+
+        return {
+          mode: "done"
+        } as const;
+      });
+
+      if (transitionResult.mode === "ignored") {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "job.ignored",
+            reason: transitionResult.reason,
+            tenantId,
+            queueName: job.queueName,
+            stage,
+            jobId: job.id?.toString(),
+            receiptId,
+            correlationId,
+            attempt,
+            maxAttempts
+          })
+        );
+      }
 
       // eslint-disable-next-line no-console
       console.log(
@@ -542,21 +648,46 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
         classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
       const structuredError = toLogError(error);
       const truncatedStack = truncateText(toSafeStack(structuredError.stack), 4000);
+      const finalStatus = errorClass === ErrorClass.TRANSIENT ? "failed_transient" : "failed_permanent";
+      const finalErrorClass = errorClass === ErrorClass.TRANSIENT ? "transient" : "permanent";
+
+      if (safeTenantId && safeReceiptId) {
+        try {
+          await withTenantClient(safeTenantId, async (client) => {
+            await client.query(
+              `
+                UPDATE mail_notification_receipts
+                SET
+                  processing_status = $3,
+                  last_error_class = $4,
+                  last_error = LEFT($5, 1000),
+                  last_error_at = now()
+                WHERE tenant_id = $1
+                  AND id = $2
+              `,
+              [safeTenantId, safeReceiptId, finalStatus, finalErrorClass, structuredError.message]
+            );
+          });
+        } catch {
+          // ignore best-effort persistence failure
+        }
+      }
 
       // eslint-disable-next-line no-console
       console.error(
-        JSON.stringify(
-          toStructuredLogEvent(baseLogContext, "job.error", {
-            startedAt: startedAtIso,
-            elapsedMs: Date.now() - startedAt,
-            attempt,
-            maxAttempts,
-            errorClass,
-            errorCode: structuredError.code ?? classifiedError.code,
-            errorMessage: structuredError.message,
-            errorStack: truncatedStack
-          })
-        )
+        JSON.stringify({
+          ...toStructuredLogContext(baseLogContext),
+          event: "job.error",
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt,
+          attempt,
+          maxAttempts,
+          errorClass,
+          errorCode: structuredError.code ?? classifiedError.code,
+          errorMessage: structuredError.message,
+          errorStack: truncatedStack,
+          receiptId: safeReceiptId
+        })
       );
 
       if (errorClass === ErrorClass.PERMANENT) {
