@@ -144,6 +144,77 @@ function failedAt(job) {
   return job.finishedOn ?? job.processedOn ?? job.timestamp ?? 0;
 }
 
+async function collectQueueSnapshot({
+  queue,
+  queueName,
+  tenantId,
+  sinceCutoffMs,
+  limit,
+  fetchLimit,
+  now
+}) {
+  const paused = await queue.isPaused();
+  const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
+
+  const activeJobs = await queue.getJobs(["active"], 0, fetchLimit - 1, false);
+  const activeSamples = activeJobs
+    .filter((job) => job.data?.tenantId === tenantId)
+    .sort((a, b) => {
+      const timeDelta = activeStart(a) - activeStart(b);
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+      return jobSortId(a).localeCompare(jobSortId(b));
+    })
+    .slice(0, limit)
+    .map((job) => ({
+      jobId: job.id?.toString() ?? null,
+      tenantId: job.data?.tenantId ?? null,
+      correlationId: job.data?.correlationId ?? null,
+      startedAt: activeStart(job) > 0 ? new Date(activeStart(job)).toISOString() : null,
+      ageMs: activeStart(job) > 0 ? Math.max(0, now - activeStart(job)) : null
+    }));
+
+  const failedJobs = await queue.getJobs(["failed"], 0, fetchLimit - 1, false);
+  const failedSamples = failedJobs
+    .filter((job) => job.data?.tenantId === tenantId)
+    .filter((job) => {
+      const when = failedAt(job);
+      return when === 0 ? true : when >= sinceCutoffMs;
+    })
+    .sort((a, b) => {
+      const timeDelta = failedAt(b) - failedAt(a);
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+      return jobSortId(b).localeCompare(jobSortId(a));
+    })
+    .slice(0, limit)
+    .map((job) => ({
+      jobId: job.id?.toString() ?? null,
+      tenantId: job.data?.tenantId ?? null,
+      correlationId: job.data?.correlationId ?? null,
+      failedAt: failedAt(job) > 0 ? new Date(failedAt(job)).toISOString() : null,
+      failedAgeMs: failedAt(job) > 0 ? Math.max(0, now - failedAt(job)) : null
+    }));
+
+  return {
+    queueName,
+    paused,
+    counts: {
+      waiting: counts.waiting ?? 0,
+      active: counts.active ?? 0,
+      delayed: counts.delayed ?? 0,
+      failed: counts.failed ?? 0,
+      completed: counts.completed ?? 0
+    },
+    samples: {
+      active: activeSamples,
+      failed: failedSamples
+    }
+  };
+}
+
 function emitError(errorMessage) {
   console.error(
     JSON.stringify({
@@ -191,6 +262,22 @@ function evaluateThresholds(input) {
     markWarn("queue_waiting_warn");
   }
 
+  if (input.mailFailedPermanentCount >= input.alertFailedPermanentReceipts) {
+    markAlert("mail_failed_permanent_alert");
+  }
+
+  if (input.mailFailedTransientCount >= input.warnFailedTransientReceipts) {
+    markWarn("mail_failed_transient_warn");
+  }
+
+  if (input.mailboxSyncLagCount >= 1) {
+    markWarn("mailbox_sync_lag_warn");
+  }
+
+  if (input.mailboxSyncPermanentErrorCount >= input.alertMailboxSyncPermanentErrors) {
+    markAlert("mailbox_sync_permanent_error_alert");
+  }
+
   return {
     status,
     reasons
@@ -225,6 +312,15 @@ async function main() {
   const alertWaiting = toIntInRange(process.env.ALERT_WAITING, 200, 0, 1_000_000);
   const warnStuck = toIntInRange(process.env.WARN_STUCK, 1, 0, 1_000_000);
   const alertStuck = toIntInRange(process.env.ALERT_STUCK, 5, 0, 1_000_000);
+  const warnFailedTransientReceipts = toIntInRange(process.env.WARN_FAILED_TRANSIENT_RECEIPTS, 3, 0, 1_000_000);
+  const alertFailedPermanentReceipts = toIntInRange(process.env.ALERT_FAILED_PERMANENT_RECEIPTS, 1, 0, 1_000_000);
+  const syncLagMinutes = toIntInRange(process.env.SYNC_LAG_MINUTES, 10, 1, 10_080);
+  const alertMailboxSyncPermanentErrors = toIntInRange(
+    process.env.ALERT_MAILBOX_SYNC_PERMANENT_ERRORS,
+    1,
+    0,
+    1_000_000
+  );
 
   if (!redisUrl) {
     emitError("REDIS_URL is required");
@@ -253,7 +349,11 @@ async function main() {
     warnWaiting === null ||
     alertWaiting === null ||
     warnStuck === null ||
-    alertStuck === null
+    alertStuck === null ||
+    warnFailedTransientReceipts === null ||
+    alertFailedPermanentReceipts === null ||
+    syncLagMinutes === null ||
+    alertMailboxSyncPermanentErrors === null
   ) {
     emitError("Threshold env values are invalid");
     process.exit(1);
@@ -296,6 +396,8 @@ async function main() {
     enableReadyCheck: false
   });
   const queue = new Queue(queueName, { connection: redis });
+  const mailNotificationsQueue = new Queue("mail_notifications", { connection: redis });
+  const mailboxSyncQueue = new Queue("mailbox_sync", { connection: redis });
 
   try {
     console.log(
@@ -312,7 +414,11 @@ async function main() {
           warnWaiting,
           alertWaiting,
           warnStuck,
-          alertStuck
+          alertStuck,
+          warnFailedTransientReceipts,
+          alertFailedPermanentReceipts,
+          syncLagMinutes,
+          alertMailboxSyncPermanentErrors
         },
         redisUrlHost: redisHost,
         dbHost,
@@ -362,67 +468,61 @@ LIMIT 1;
       })
     );
 
-    const isPaused = await queue.isPaused();
-    const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
-
-    const activeJobs = await queue.getJobs(["active"], 0, failedFetchLimit - 1, false);
-    const activeSamples = activeJobs
-      .filter((job) => job.data?.tenantId === tenantId)
-      .sort((a, b) => {
-        const timeDelta = activeStart(a) - activeStart(b);
-        if (timeDelta !== 0) {
-          return timeDelta;
-        }
-        return jobSortId(a).localeCompare(jobSortId(b));
-      })
-      .slice(0, limit)
-      .map((job) => ({
-        jobId: job.id?.toString() ?? null,
-        tenantId: job.data?.tenantId ?? null,
-        correlationId: job.data?.correlationId ?? null,
-        startedAt: activeStart(job) > 0 ? new Date(activeStart(job)).toISOString() : null,
-        ageMs: activeStart(job) > 0 ? Math.max(0, now - activeStart(job)) : null
-      }));
-
-    const failedJobs = await queue.getJobs(["failed"], 0, failedFetchLimit - 1, false);
-    const failedSamples = failedJobs
-      .filter((job) => job.data?.tenantId === tenantId)
-      .filter((job) => {
-        const when = failedAt(job);
-        return when === 0 ? true : when >= sinceCutoffMs;
-      })
-      .sort((a, b) => {
-        const timeDelta = failedAt(b) - failedAt(a);
-        if (timeDelta !== 0) {
-          return timeDelta;
-        }
-        return jobSortId(b).localeCompare(jobSortId(a));
-      })
-      .slice(0, limit)
-      .map((job) => ({
-        jobId: job.id?.toString() ?? null,
-        tenantId: job.data?.tenantId ?? null,
-        correlationId: job.data?.correlationId ?? null,
-        failedAt: failedAt(job) > 0 ? new Date(failedAt(job)).toISOString() : null,
-        failedAgeMs: failedAt(job) > 0 ? Math.max(0, now - failedAt(job)) : null
-      }));
+    const docsQueueSnapshot = await collectQueueSnapshot({
+      queue,
+      queueName,
+      tenantId,
+      sinceCutoffMs,
+      limit,
+      fetchLimit: failedFetchLimit,
+      now
+    });
 
     console.log(
       JSON.stringify({
         event: "ops.monitor.queue",
-        queueName,
-        paused: isPaused,
-        counts: {
-          waiting: counts.waiting ?? 0,
-          active: counts.active ?? 0,
-          delayed: counts.delayed ?? 0,
-          failed: counts.failed ?? 0,
-          completed: counts.completed ?? 0
-        },
-        samples: {
-          active: activeSamples,
-          failed: failedSamples
-        }
+        queueName: docsQueueSnapshot.queueName,
+        paused: docsQueueSnapshot.paused,
+        counts: docsQueueSnapshot.counts,
+        samples: docsQueueSnapshot.samples
+      })
+    );
+
+    const mailNotificationsQueueSnapshot = await collectQueueSnapshot({
+      queue: mailNotificationsQueue,
+      queueName: "mail_notifications",
+      tenantId,
+      sinceCutoffMs,
+      limit: Math.min(limit, 5),
+      fetchLimit: failedFetchLimit,
+      now
+    });
+    const mailboxSyncQueueSnapshot = await collectQueueSnapshot({
+      queue: mailboxSyncQueue,
+      queueName: "mailbox_sync",
+      tenantId,
+      sinceCutoffMs,
+      limit: Math.min(limit, 5),
+      fetchLimit: failedFetchLimit,
+      now
+    });
+    console.log(
+      JSON.stringify({
+        event: "ops.monitor.mail_queues",
+        queues: [
+          {
+            queueName: mailNotificationsQueueSnapshot.queueName,
+            paused: mailNotificationsQueueSnapshot.paused,
+            counts: mailNotificationsQueueSnapshot.counts,
+            samples: mailNotificationsQueueSnapshot.samples
+          },
+          {
+            queueName: mailboxSyncQueueSnapshot.queueName,
+            paused: mailboxSyncQueueSnapshot.paused,
+            counts: mailboxSyncQueueSnapshot.counts,
+            samples: mailboxSyncQueueSnapshot.samples
+          }
+        ]
       })
     );
 
@@ -549,17 +649,104 @@ LIMIT ${limit};
       })
     );
 
+    const mailReceiptsWindowSql = `
+SELECT json_build_object(
+  'received', count(*) FILTER (WHERE processing_status = 'received'),
+  'enqueued', count(*) FILTER (WHERE processing_status = 'enqueued'),
+  'processing', count(*) FILTER (WHERE processing_status = 'processing'),
+  'done', count(*) FILTER (WHERE processing_status = 'done'),
+  'failed_transient', count(*) FILTER (WHERE processing_status = 'failed_transient'),
+  'failed_permanent', count(*) FILTER (WHERE processing_status = 'failed_permanent'),
+  'ignored', count(*) FILTER (WHERE processing_status = 'ignored')
+)::text
+FROM mail_notification_receipts
+WHERE tenant_id = ${sqlLiteral(tenantId)}::uuid
+  AND provider = 'gmail'
+  AND received_at >= now() - (${windowMinutes} * interval '1 minute');
+`;
+
+    const mailboxSyncIndicatorsSql = `
+SELECT json_build_object(
+  'lagCount', count(*) FILTER (
+    WHERE pending_max_history_id > last_history_id
+      AND pending_updated_at <= now() - (${syncLagMinutes} * interval '1 minute')
+  ),
+  'permanentErrorCount', count(*) FILTER (
+    WHERE last_error IS NOT NULL
+      AND updated_at >= now() - (${windowMinutes} * interval '1 minute')
+      AND (lower(last_error) LIKE '%missing%' OR lower(last_error) LIKE '%invalid%')
+  )
+)::text
+FROM mailbox_sync_state
+WHERE tenant_id = ${sqlLiteral(tenantId)}::uuid
+  AND provider = 'gmail';
+`;
+
+    const [mailReceiptsWindowResult, mailboxSyncIndicatorsResult] = await Promise.all([
+      runTenantSql(psqlBin, databaseUrl, tenantId, mailReceiptsWindowSql),
+      runTenantSql(psqlBin, databaseUrl, tenantId, mailboxSyncIndicatorsSql)
+    ]);
+    if (!mailReceiptsWindowResult.ok || !mailboxSyncIndicatorsResult.ok) {
+      emitError(
+        `${(mailReceiptsWindowResult.stderr || "").trim()} ${(mailboxSyncIndicatorsResult.stderr || "").trim()}`.trim() ||
+          "failed to query mail monitoring metrics"
+      );
+      process.exit(1);
+    }
+
+    const mailRows = parseTabJsonRows(mailReceiptsWindowResult.stdout);
+    const mailCounts = mailRows.length > 0 ? JSON.parse(mailRows[0]) : {};
+    const mailReceiptsWindow = {
+      received: Number(mailCounts.received ?? 0),
+      enqueued: Number(mailCounts.enqueued ?? 0),
+      processing: Number(mailCounts.processing ?? 0),
+      done: Number(mailCounts.done ?? 0),
+      failed_transient: Number(mailCounts.failed_transient ?? 0),
+      failed_permanent: Number(mailCounts.failed_permanent ?? 0),
+      ignored: Number(mailCounts.ignored ?? 0)
+    };
+    console.log(
+      JSON.stringify({
+        event: "ops.monitor.mail_receipts_window",
+        tenantId,
+        windowMinutes,
+        counts: mailReceiptsWindow
+      })
+    );
+
+    const mailboxRows = parseTabJsonRows(mailboxSyncIndicatorsResult.stdout);
+    const mailboxCounts = mailboxRows.length > 0 ? JSON.parse(mailboxRows[0]) : {};
+    const mailboxSyncLagCount = Number(mailboxCounts.lagCount ?? 0);
+    const mailboxSyncPermanentErrorCount = Number(mailboxCounts.permanentErrorCount ?? 0);
+    console.log(
+      JSON.stringify({
+        event: "ops.monitor.mailbox_sync_indicators",
+        tenantId,
+        windowMinutes,
+        syncLagMinutes,
+        lagCount: mailboxSyncLagCount,
+        permanentErrorCount: mailboxSyncPermanentErrorCount
+      })
+    );
+
     const thresholdResult = evaluateThresholds({
-      queuePaused: isPaused,
+      queuePaused: docsQueueSnapshot.paused,
       stuckCount,
       failedRate,
-      waitingCount: counts.waiting ?? 0,
+      waitingCount: docsQueueSnapshot.counts.waiting ?? 0,
       warnFailedRate,
       alertFailedRate,
       warnWaiting,
       alertWaiting,
       warnStuck,
-      alertStuck
+      alertStuck,
+      mailFailedTransientCount: mailReceiptsWindow.failed_transient,
+      mailFailedPermanentCount: mailReceiptsWindow.failed_permanent,
+      mailboxSyncLagCount,
+      mailboxSyncPermanentErrorCount,
+      warnFailedTransientReceipts,
+      alertFailedPermanentReceipts,
+      alertMailboxSyncPermanentErrors
     });
 
     console.log(
@@ -594,6 +781,8 @@ LIMIT ${limit};
     process.exit(1);
   } finally {
     await queue.close();
+    await mailNotificationsQueue.close();
+    await mailboxSyncQueue.close();
     await redis.quit();
   }
 }

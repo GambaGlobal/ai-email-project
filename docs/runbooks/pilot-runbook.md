@@ -152,6 +152,21 @@ Log verification:
 Receipt ledger verification:
 - `psql "$DATABASE_URL" -c "SELECT count(*) FROM mail_notification_receipts WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid AND provider='gmail' AND message_id='<messageId>';"`
 
+## Email notification ops
+Prefer command-first visibility during incidents.
+
+Receipt lifecycle visibility:
+1. `DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w mail:receipts:list`
+2. `DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" RECEIPT_ID=\"<receipt-id>\" pnpm -w mail:receipts:show`
+
+Mailbox sync cursor visibility:
+1. `DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w mailbox:sync:list`
+2. `DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" MAILBOX_ID=\"<mailbox-id>\" pnpm -w mailbox:sync:show`
+
+Mail incident triage/monitoring:
+1. `REDIS_URL=\"redis://127.0.0.1:6379\" DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w ops:triage`
+2. `REDIS_URL=\"redis://127.0.0.1:6379\" DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w ops:monitor`
+
 ## Gmail notifications fanout gate
 Guarantee:
 - Receipt dedupe happens first at DB boundary.
