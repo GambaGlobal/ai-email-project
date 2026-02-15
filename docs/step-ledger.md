@@ -122,3 +122,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 11.2 | 2026-02-15 | SELF | Added Phase 11 v1 tenant isolation requirements spec across DB, storage, queue, observability, admin, and provider boundaries. | Evidence: `pnpm -w repo:check`. |
 | 11.3 | 2026-02-15 | SELF | Added Phase 11 v1 token storage and secrets posture spec covering OAuth lifecycle, encryption posture, access boundaries, rotation/revocation, audit, and redaction rules. | Evidence: `pnpm -w repo:check`. |
 | 11.4 | 2026-02-15 | SELF | Added Phase 11 v1 retention and deletion policy with default retention matrix, deletion workflows, backup aging disclosure, and debug-retention posture. | Evidence: `pnpm -w repo:check`. |
+| 11.5 | 2026-02-15 | SELF | Added Phase 11 v1 plain-language security and privacy FAQ for operators/procurement aligned to data, isolation, token, and retention posture docs. | Evidence: `pnpm -w repo:check`. |
