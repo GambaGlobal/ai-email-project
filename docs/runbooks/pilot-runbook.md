@@ -265,6 +265,24 @@ Exit codes:
 - `2` for `ALERT` (automation-friendly)
 - `1` for validation/connection/unexpected errors
 
+### Alert drill (practice)
+Use this to rehearse operator response in pilot/dev and verify alerting behavior end-to-end.
+
+Dry run (safe, no mutation):
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w ops:alert-drill`
+
+Confirmed drill (pause queue + insert synthetic failure + verify ALERT + cleanup + verify OK):
+- `REDIS_URL="redis://127.0.0.1:6379" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" ALERT_DRILL_CONFIRM=1 pnpm -w ops:alert-drill`
+
+Expected drill outcomes:
+- During drill verification, `ops:monitor` reports `ALERT` (exit code `2`).
+- After cleanup, `ops:monitor` returns `OK` (exit code `0`).
+
+Safety notes:
+- Default mode is dry-run; mutation requires `ALERT_DRILL_CONFIRM=1`.
+- `KEEP_STATE=1` keeps paused/synthetic state for manual follow-up.
+- `NODE_ENV=production` is blocked unless `ALLOW_PROD_DRILL=1`.
+
 ### Queue status (read-only)
 Use this command for a deterministic queue snapshot (counts + active + recent failed samples):
 - `REDIS_URL="redis://127.0.0.1:6379" pnpm -w queue:status`
