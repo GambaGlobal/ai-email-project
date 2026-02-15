@@ -6,8 +6,12 @@ import {
   DEFAULT_JOB_ATTEMPTS,
   ErrorClass,
   KILL_SWITCH_DOCS_INGESTION,
+  KILL_SWITCH_MAILBOX_SYNC,
+  KILL_SWITCH_MAIL_NOTIFICATIONS,
   classifyError,
   isGlobalDocsIngestionDisabled,
+  isGlobalMailboxSyncDisabled,
+  isGlobalMailNotificationsDisabled,
   type CorrelationId
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
@@ -560,6 +564,33 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
       const messageId = assertRequiredString(job.data.messageId, "messageId");
       const receiptId = assertRequiredString(job.data.receiptId, "receiptId");
 
+      let mailNotificationsKillSwitch:
+        | { disabled: false; scope: null; key: string; reason: null }
+        | { disabled: true; scope: "global" | "tenant"; key: string; reason: string } = {
+        disabled: false,
+        scope: null,
+        key: KILL_SWITCH_MAIL_NOTIFICATIONS,
+        reason: null
+      };
+      if (isGlobalMailNotificationsDisabled(process.env)) {
+        mailNotificationsKillSwitch = {
+          disabled: true,
+          scope: "global",
+          key: KILL_SWITCH_MAIL_NOTIFICATIONS,
+          reason: "mail_notifications disabled by global env"
+        };
+      } else {
+        const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_MAIL_NOTIFICATIONS);
+        if (tenantKillSwitch?.isEnabled) {
+          mailNotificationsKillSwitch = {
+            disabled: true,
+            scope: "tenant",
+            key: KILL_SWITCH_MAIL_NOTIFICATIONS,
+            reason: tenantKillSwitch.reason ?? "mail_notifications disabled by tenant kill switch"
+          };
+        }
+      }
+
       const transitionResult = await withTenantClient(tenantId, async (client) => {
         const receiptResult = await client.query(
           `
@@ -601,6 +632,31 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
           return {
             mode: "ignored",
             reason: receipt.processed_at ? "already_processed" : `status_${status}`
+          } as const;
+        }
+
+        if (mailNotificationsKillSwitch.disabled) {
+          await client.query(
+            `
+              UPDATE mail_notification_receipts
+              SET
+                processing_status = 'ignored',
+                processed_at = COALESCE(processed_at, now()),
+                last_error_class = 'permanent',
+                last_error = LEFT($3, 1000),
+                last_error_at = now()
+              WHERE tenant_id = $1
+                AND id = $2
+            `,
+            [tenantId, receiptId, mailNotificationsKillSwitch.reason]
+          );
+
+          return {
+            mode: "ignored",
+            reason: "kill_switch",
+            killSwitchScope: mailNotificationsKillSwitch.scope,
+            killSwitchKey: mailNotificationsKillSwitch.key,
+            killSwitchReason: mailNotificationsKillSwitch.reason
           } as const;
         }
 
@@ -650,6 +706,10 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
           JSON.stringify({
             event: "job.ignored",
             reason: transitionResult.reason,
+            key: "killSwitchKey" in transitionResult ? transitionResult.killSwitchKey : null,
+            scope: "killSwitchScope" in transitionResult ? transitionResult.killSwitchScope : null,
+            killSwitchReason:
+              "killSwitchReason" in transitionResult ? transitionResult.killSwitchReason : null,
             tenantId,
             queueName: job.queueName,
             stage,
@@ -774,6 +834,67 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
     try {
       const tenantId = assertRequiredString(job.data.tenantId, "tenantId");
       const mailboxId = assertRequiredString(job.data.mailboxId, "mailboxId");
+      let mailboxSyncKillSwitch:
+        | { disabled: false; scope: null; key: string; reason: null }
+        | { disabled: true; scope: "global" | "tenant"; key: string; reason: string } = {
+        disabled: false,
+        scope: null,
+        key: KILL_SWITCH_MAILBOX_SYNC,
+        reason: null
+      };
+      if (isGlobalMailboxSyncDisabled(process.env)) {
+        mailboxSyncKillSwitch = {
+          disabled: true,
+          scope: "global",
+          key: KILL_SWITCH_MAILBOX_SYNC,
+          reason: "mailbox_sync disabled by global env"
+        };
+      } else {
+        const tenantKillSwitch = await getTenantKillSwitchState(tenantId, KILL_SWITCH_MAILBOX_SYNC);
+        if (tenantKillSwitch?.isEnabled) {
+          mailboxSyncKillSwitch = {
+            disabled: true,
+            scope: "tenant",
+            key: KILL_SWITCH_MAILBOX_SYNC,
+            reason: tenantKillSwitch.reason ?? "mailbox_sync disabled by tenant kill switch"
+          };
+        }
+      }
+      if (mailboxSyncKillSwitch.disabled) {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "job.ignored",
+            reason: "kill_switch",
+            key: mailboxSyncKillSwitch.key,
+            scope: mailboxSyncKillSwitch.scope,
+            killSwitchReason: mailboxSyncKillSwitch.reason,
+            tenantId,
+            mailboxId,
+            queueName: job.queueName,
+            jobId: job.id?.toString(),
+            stage: "mailbox_sync",
+            attempt,
+            maxAttempts
+          })
+        );
+
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            ...toStructuredLogContext(baseLogContext),
+            event: "job.done",
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts,
+            lastHistoryId: "0",
+            pendingMaxHistoryId: "0",
+            drainPasses: 0
+          })
+        );
+        return;
+      }
 
       const runInit = await withTenantClient(tenantId, async (client) => {
         const stateResult = await client.query(

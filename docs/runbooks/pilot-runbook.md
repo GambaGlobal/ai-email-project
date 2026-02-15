@@ -324,6 +324,30 @@ Per-tenant kill switch SQL fallback (Postgres):
   - `psql "$DATABASE_URL" -c "INSERT INTO tenant_kill_switches (tenant_id, key, is_enabled, reason, updated_at) VALUES ('00000000-0000-0000-0000-000000000001', 'docs_ingestion', false, null, now()) ON CONFLICT (tenant_id, key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled, reason = EXCLUDED.reason, updated_at = now();"`
 - Expected logs: `notification.rejected` with `reason="kill_switch_tenant"` (API), `job.ignored` with `reason="kill_switch_tenant"` (worker).
 
+Mail pipeline kill switches:
+- Global env kill switches:
+  - `MAIL_NOTIFICATIONS_DISABLED=1`
+  - `MAILBOX_SYNC_DISABLED=1`
+- Tenant kill switch keys:
+  - `mail_notifications`
+  - `mailbox_sync`
+- Semantics when disabled:
+  - `/v1/notifications/gmail` still ACKs with `204` to avoid Pub/Sub retry storms.
+  - Receipt/state rows are still persisted.
+  - Enqueue is skipped and deterministic ignored logs are emitted.
+  - After re-enable, use replay commands to recover skipped work.
+
+Preferred operator commands (tenant scope):
+1. Disable:
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="mail_notifications" IS_ENABLED="1" REASON="incident mitigation" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="mailbox_sync" IS_ENABLED="1" REASON="incident mitigation" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+2. Re-enable:
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="mail_notifications" IS_ENABLED="0" REASON="recovered" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" TENANT_ID="00000000-0000-0000-0000-000000000001" KEY="mailbox_sync" IS_ENABLED="0" REASON="recovered" KILL_SWITCH_CONFIRM=1 pnpm -w kill-switch:set`
+3. Replay after re-enable:
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w mail:receipts:replay`
+   - `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TENANT_ID="00000000-0000-0000-0000-000000000001" pnpm -w mailbox:sync:replay`
+
 ### Replay failed jobs (manual)
 Use this after deploying a fix or recovering from transient incidents when you need explicit, operator-controlled replay of failed jobs.
 

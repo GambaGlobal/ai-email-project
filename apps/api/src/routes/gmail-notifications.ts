@@ -1,5 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
-import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
+import {
+  KILL_SWITCH_MAIL_NOTIFICATIONS,
+  KILL_SWITCH_MAILBOX_SYNC,
+  asCorrelationId,
+  isGlobalMailboxSyncDisabled,
+  isGlobalMailNotificationsDisabled,
+  newCorrelationId
+} from "@ai-email/shared";
 import { queryOne, queryRowsGlobal, withTenantClient } from "../lib/db.js";
 import {
   enqueueMailNotification,
@@ -43,6 +50,18 @@ type MailboxSyncStateRow = {
   pending_max_history_id: string;
   enqueued_at: string | null;
   enqueued_job_id: string | null;
+};
+
+type TenantKillSwitchRow = {
+  isEnabled: boolean;
+  reason: string | null;
+};
+
+type KillSwitchDecision = {
+  disabled: boolean;
+  scope: "global" | "tenant" | null;
+  key: string;
+  reason: string | null;
 };
 
 function resolveCorrelationId(headers: Record<string, unknown>) {
@@ -149,12 +168,69 @@ async function resolveMailboxByEmail(emailAddress: string): Promise<{ tenantId: 
   };
 }
 
+async function getTenantKillSwitchState(tenantId: string, key: string): Promise<TenantKillSwitchRow | null> {
+  return withTenantClient(tenantId, async (client) => {
+    const row = await queryOne(
+      client,
+      `
+        SELECT is_enabled, reason
+        FROM tenant_kill_switches
+        WHERE tenant_id = $1
+          AND key = $2
+      `,
+      [tenantId, key]
+    );
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      isEnabled: row.is_enabled === true,
+      reason: typeof row.reason === "string" ? row.reason : null
+    };
+  });
+}
+
+function decideKillSwitch(input: {
+  key: string;
+  globalDisabled: boolean;
+  tenantState: TenantKillSwitchRow | null;
+}): KillSwitchDecision {
+  if (input.globalDisabled) {
+    return {
+      disabled: true,
+      scope: "global",
+      key: input.key,
+      reason: `${input.key} disabled by global env`
+    };
+  }
+
+  if (input.tenantState?.isEnabled) {
+    return {
+      disabled: true,
+      scope: "tenant",
+      key: input.key,
+      reason: input.tenantState.reason ?? `${input.key} disabled by tenant kill switch`
+    };
+  }
+
+  return {
+    disabled: false,
+    scope: null,
+    key: input.key,
+    reason: null
+  };
+}
+
 async function coalesceMailboxSync(input: {
   tenantId: string;
   mailboxId: string;
   provider: "gmail";
   historyId: string;
   correlationId: string;
+  enqueueEnabled: boolean;
+  killSwitchDecision: KillSwitchDecision | null;
 }): Promise<
   | {
       kind: "enqueued";
@@ -166,6 +242,14 @@ async function coalesceMailboxSync(input: {
       kind: "deduped";
       reason: "already_enqueued";
       jobId: string;
+      pendingMaxHistoryId: string;
+      lastHistoryId: string;
+    }
+  | {
+      kind: "ignored";
+      reason: string;
+      scope: "global" | "tenant";
+      key: string;
       pendingMaxHistoryId: string;
       lastHistoryId: string;
     }
@@ -216,6 +300,32 @@ async function coalesceMailboxSync(input: {
     }
 
     const jobId = mailboxSyncJobId(input.provider, input.mailboxId);
+    if (!input.enqueueEnabled) {
+      const reason = input.killSwitchDecision?.reason ?? "mailbox_sync disabled by kill switch";
+      await client.query(
+        `
+          UPDATE mailbox_sync_state
+          SET
+            enqueued_at = NULL,
+            enqueued_job_id = NULL,
+            last_error = LEFT($4, 500),
+            updated_at = now()
+          WHERE tenant_id = $1
+            AND mailbox_id = $2
+            AND provider = $3
+        `,
+        [input.tenantId, input.mailboxId, input.provider, reason]
+      );
+
+      return {
+        kind: "ignored",
+        reason,
+        scope: input.killSwitchDecision?.scope ?? "tenant",
+        key: input.killSwitchDecision?.key ?? KILL_SWITCH_MAILBOX_SYNC,
+        pendingMaxHistoryId: upserted.pending_max_history_id,
+        lastHistoryId: upserted.last_history_id
+      } as const;
+    }
 
     try {
       const enqueueResult = await enqueueMailboxSync(
@@ -366,6 +476,28 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(204).send();
     }
 
+    let notificationsKillSwitchDecision: KillSwitchDecision;
+    let mailboxSyncKillSwitchDecision: KillSwitchDecision;
+    try {
+      const [tenantMailNotificationsState, tenantMailboxSyncState] = await Promise.all([
+        getTenantKillSwitchState(tenantId, KILL_SWITCH_MAIL_NOTIFICATIONS),
+        getTenantKillSwitchState(tenantId, KILL_SWITCH_MAILBOX_SYNC)
+      ]);
+      notificationsKillSwitchDecision = decideKillSwitch({
+        key: KILL_SWITCH_MAIL_NOTIFICATIONS,
+        globalDisabled: isGlobalMailNotificationsDisabled(process.env),
+        tenantState: tenantMailNotificationsState
+      });
+      mailboxSyncKillSwitchDecision = decideKillSwitch({
+        key: KILL_SWITCH_MAILBOX_SYNC,
+        globalDisabled: isGlobalMailboxSyncDisabled(process.env),
+        tenantState: tenantMailboxSyncState
+      });
+    } catch (error) {
+      request.log.error({ error, tenantId }, "Failed to evaluate mail kill switches");
+      return reply.code(500).send({ error: "Unable to evaluate notification availability" });
+    }
+
     try {
       const outcome = await withTenantClient(tenantId, async (client) => {
         const inserted = await queryOne(
@@ -420,6 +552,31 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const jobId = mailNotificationJobId(receipt.id);
+        if (notificationsKillSwitchDecision.disabled) {
+          await client.query(
+            `
+              UPDATE mail_notification_receipts
+              SET
+                processing_status = 'ignored',
+                enqueued_at = NULL,
+                enqueued_job_id = NULL,
+                last_error = LEFT($3, 1000),
+                last_error_at = now(),
+                last_error_class = 'permanent'
+              WHERE tenant_id = $1
+                AND id = $2
+            `,
+            [tenantId, receipt.id, notificationsKillSwitchDecision.reason ?? "mail_notifications disabled"]
+          );
+          return {
+            kind: "ignored",
+            inserted: inserted !== null,
+            receiptId: receipt.id,
+            scope: notificationsKillSwitchDecision.scope ?? "tenant",
+            key: notificationsKillSwitchDecision.key,
+            reason: notificationsKillSwitchDecision.reason
+          } as const;
+        }
 
         try {
           const enqueueResult = await enqueueMailNotification(
@@ -541,6 +698,23 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      if (outcome.kind === "ignored") {
+        console.log(
+          JSON.stringify({
+            event: "mail.notification.ignored",
+            correlationId,
+            tenantId,
+            mailboxId,
+            provider,
+            messageId,
+            receiptId: outcome.receiptId,
+            scope: outcome.scope,
+            key: outcome.key,
+            reason: outcome.reason ?? null
+          })
+        );
+      }
+
       if (outcome.kind === "enqueue_failed") {
         request.log.error(
           {
@@ -599,7 +773,9 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
         mailboxId,
         provider: "gmail",
         historyId: parsed.gmailHistoryId,
-        correlationId
+        correlationId,
+        enqueueEnabled: !mailboxSyncKillSwitchDecision.disabled,
+        killSwitchDecision: mailboxSyncKillSwitchDecision
       });
 
       if (mailboxSyncOutcome.kind === "failed") {
@@ -639,6 +815,19 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
             correlationId,
             reason: mailboxSyncOutcome.reason,
             jobId: mailboxSyncOutcome.jobId
+          })
+        );
+      } else if (mailboxSyncOutcome.kind === "ignored") {
+        console.log(
+          JSON.stringify({
+            event: "mailbox.sync.ignored",
+            tenantId,
+            mailboxId,
+            provider,
+            correlationId,
+            scope: mailboxSyncOutcome.scope,
+            key: mailboxSyncOutcome.key,
+            reason: mailboxSyncOutcome.reason
           })
         );
       } else {

@@ -12,7 +12,7 @@ const VALID_STATUS = new Set([
   "failed_permanent",
   "ignored"
 ]);
-const TERMINAL_STATUS = new Set(["done", "ignored", "failed_permanent"]);
+const TERMINAL_STATUS = new Set(["done", "failed_permanent"]);
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAIL_NOTIFICATIONS_QUEUE = "mail_notifications";
@@ -225,7 +225,7 @@ async function main() {
   const correlationId = normalizeOptionalString(process.env.CORRELATION_ID);
   const messageId = normalizeOptionalString(process.env.MESSAGE_ID);
   const provider = normalizeOptionalString(process.env.PROVIDER) ?? "gmail";
-  const statuses = parseStatuses(process.env.STATUSES ?? "received,failed_transient");
+  const statuses = parseStatuses(process.env.STATUSES ?? "received,failed_transient,ignored");
   const limit = toIntInRange(process.env.LIMIT, 50, 1, 200);
   const sinceMinutes = toIntInRange(process.env.SINCE_MINUTES, 1440, 1, 10_080);
   const dryRun = process.env.MAIL_RECEIPTS_REPLAY_CONFIRM !== "1";
