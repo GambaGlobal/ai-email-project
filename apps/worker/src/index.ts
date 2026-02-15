@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { createDecipheriv } from "node:crypto";
 import { UnrecoverableError, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
+import { GmailProvider } from "../../../packages/mail-gmail/src/gmail-provider.js";
 import {
+  type Cursor,
   DEFAULT_JOB_ATTEMPTS,
   ErrorClass,
+  type MailboxId,
+  type MailChange,
   KILL_SWITCH_DOCS_INGESTION,
   KILL_SWITCH_MAILBOX_SYNC,
   KILL_SWITCH_MAIL_NOTIFICATIONS,
@@ -15,6 +20,7 @@ import {
   type CorrelationId
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
+import { syncMailbox, type MailboxCursorStore, type MailboxSyncProvider } from "./mailbox-sync.js";
 
 type DocsIngestionJob = {
   tenantId: string;
@@ -59,6 +65,20 @@ type MailboxSyncStateSnapshotRow = {
   last_history_id: string;
   pending_max_history_id: string;
   last_correlation_id: string | null;
+};
+
+type MailProviderConnectionRow = {
+  access_token_ciphertext: string | null;
+  access_token_iv: string | null;
+  access_token_tag: string | null;
+  refresh_token_ciphertext: string | null;
+  refresh_token_iv: string | null;
+  refresh_token_tag: string | null;
+  status: string;
+};
+
+type MailboxAddressRow = {
+  email_address: string;
 };
 
 type MailNotificationReceiptRow = {
@@ -113,20 +133,6 @@ function resolveMailboxRunCorrelationId(value: unknown): string {
   return randomUUID();
 }
 
-async function fetchMailboxHistoryBoundaryStub(_input: {
-  tenantId: string;
-  mailboxId: string;
-  provider: string;
-  correlationId: string;
-  fromHistoryId: string;
-  toHistoryId: string;
-}): Promise<{ fetchedCount: number; events: unknown[] }> {
-  return {
-    fetchedCount: 0,
-    events: []
-  };
-}
-
 async function withTenantClient<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>) {
   const client = await dbPool.connect();
 
@@ -163,6 +169,202 @@ async function getTenantKillSwitchState(tenantId: string, key: string) {
     };
   });
 }
+
+function readTokenEncryptionKey(): Buffer {
+  const raw = process.env.TOKEN_ENCRYPTION_KEY;
+  if (!raw) {
+    throw new Error("TOKEN_ENCRYPTION_KEY is required to decrypt Gmail access tokens");
+  }
+
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+    return Buffer.from(raw, "hex");
+  }
+
+  const base64 = Buffer.from(raw, "base64");
+  if (base64.length === 32) {
+    return base64;
+  }
+
+  const utf8 = Buffer.from(raw, "utf8");
+  if (utf8.length === 32) {
+    return utf8;
+  }
+
+  throw new Error("TOKEN_ENCRYPTION_KEY must decode to 32 bytes (hex/base64/plain-text)");
+}
+
+function decryptToken(input: { ciphertext: string; iv: string; tag: string }): string {
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    readTokenEncryptionKey(),
+    Buffer.from(input.iv, "base64")
+  );
+  decipher.setAuthTag(Buffer.from(input.tag, "base64"));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(input.ciphertext, "base64")),
+    decipher.final()
+  ]);
+  return decrypted.toString("utf8");
+}
+
+async function loadMailboxAddress(tenantId: string, mailboxId: string): Promise<string> {
+  return withTenantClient(tenantId, async (client) => {
+    const result = await client.query(
+      `
+        SELECT email_address
+        FROM mailboxes
+        WHERE tenant_id = $1
+          AND id = $2
+          AND provider = 'gmail'
+        LIMIT 1
+      `,
+      [tenantId, mailboxId]
+    );
+    const row = result.rows[0] as MailboxAddressRow | undefined;
+    if (!row?.email_address) {
+      throw new Error(`mailbox missing or not gmail tenantId=${tenantId} mailboxId=${mailboxId}`);
+    }
+    return row.email_address;
+  });
+}
+
+async function loadGmailAccessToken(tenantId: string): Promise<string> {
+  return withTenantClient(tenantId, async (client) => {
+    const result = await client.query(
+      `
+        SELECT
+          access_token_ciphertext,
+          access_token_iv,
+          access_token_tag,
+          refresh_token_ciphertext,
+          refresh_token_iv,
+          refresh_token_tag,
+          status
+        FROM mail_provider_connections
+        WHERE tenant_id = $1
+          AND provider = 'gmail'
+        LIMIT 1
+      `,
+      [tenantId]
+    );
+    const row = result.rows[0] as MailProviderConnectionRow | undefined;
+    if (!row) {
+      throw new Error(`gmail connection missing for tenantId=${tenantId}`);
+    }
+    if (row.status !== "connected") {
+      throw new Error(`gmail connection not connected for tenantId=${tenantId}`);
+    }
+    if (row.access_token_ciphertext && row.access_token_iv && row.access_token_tag) {
+      return decryptToken({
+        ciphertext: row.access_token_ciphertext,
+        iv: row.access_token_iv,
+        tag: row.access_token_tag
+      });
+    }
+    if (row.refresh_token_ciphertext && row.refresh_token_iv && row.refresh_token_tag) {
+      return decryptToken({
+        ciphertext: row.refresh_token_ciphertext,
+        iv: row.refresh_token_iv,
+        tag: row.refresh_token_tag
+      });
+    }
+    throw new Error(`gmail token missing for tenantId=${tenantId}`);
+  });
+}
+
+class PgMailboxCursorStore implements MailboxCursorStore {
+  async get(tenantId: string, mailboxId: string): Promise<string | null> {
+    return withTenantClient(tenantId, async (client) => {
+      const result = await client.query(
+        `
+          SELECT last_history_id::text AS last_history_id
+          FROM mailbox_sync_state
+          WHERE tenant_id = $1
+            AND mailbox_id = $2
+            AND provider = 'gmail'
+          LIMIT 1
+        `,
+        [tenantId, mailboxId]
+      );
+      const row = result.rows[0] as { last_history_id?: string } | undefined;
+      return row?.last_history_id ? String(row.last_history_id) : null;
+    });
+  }
+
+  async set(tenantId: string, mailboxId: string, historyId: string): Promise<void> {
+    await withTenantClient(tenantId, async (client) => {
+      await client.query(
+        `
+          UPDATE mailbox_sync_state
+          SET
+            last_history_id = $3,
+            pending_max_history_id = GREATEST(pending_max_history_id, $3),
+            last_processed_at = now(),
+            updated_at = now()
+          WHERE tenant_id = $1
+            AND mailbox_id = $2
+            AND provider = 'gmail'
+        `,
+        [tenantId, mailboxId, historyId]
+      );
+    });
+  }
+}
+
+class GmailMailboxSyncProvider implements MailboxSyncProvider {
+  private readonly provider = new GmailProvider();
+
+  async listChanges(input: {
+    tenantId: string;
+    mailboxId: string;
+    startHistoryId: string;
+  }): Promise<{ changes: MailChange[]; nextHistoryId: string }> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    const response = await this.provider.listChanges(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId
+        }
+      },
+      {
+        cursor: input.startHistoryId as Cursor
+      }
+    );
+
+    return {
+      changes: response.changes,
+      nextHistoryId: String(response.nextCursor)
+    };
+  }
+
+  async getBaselineHistoryId(input: {
+    tenantId: string;
+    mailboxId: string;
+  }): Promise<string> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    const response = await this.provider.listChanges(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId
+        }
+      },
+      {}
+    );
+    return String(response.nextCursor);
+  }
+}
+
+const mailboxCursorStore = new PgMailboxCursorStore();
+const gmailMailboxSyncProvider = new GmailMailboxSyncProvider();
 
 type IngestionTransitionResult =
   | { mode: "started" }
@@ -970,144 +1172,117 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
         })
       );
 
-      const maxDrainPasses = 5;
-      let drainPasses = 0;
+      const stateBeforeSync = await withTenantClient(tenantId, async (client) => {
+        const result = await client.query(
+          `
+            SELECT
+              last_history_id::text AS last_history_id,
+              pending_max_history_id::text AS pending_max_history_id
+            FROM mailbox_sync_state
+            WHERE tenant_id = $1
+              AND mailbox_id = $2
+              AND provider = $3
+            FOR UPDATE
+          `,
+          [tenantId, mailboxId, provider]
+        );
+        const row = result.rows[0] as
+          | { last_history_id?: string; pending_max_history_id?: string }
+          | undefined;
+        if (!row) {
+          throw new Error("mailbox_sync_state missing for mailbox/provider");
+        }
+
+        await client.query(
+          `
+            UPDATE mailbox_sync_state
+            SET
+              enqueued_at = NULL,
+              enqueued_job_id = NULL,
+              updated_at = now()
+            WHERE tenant_id = $1
+              AND mailbox_id = $2
+              AND provider = $3
+          `,
+          [tenantId, mailboxId, provider]
+        );
+
+        return {
+          lastHistoryId: String(row.last_history_id ?? "0"),
+          pendingMaxHistoryId: String(row.pending_max_history_id ?? "0")
+        };
+      });
+
       let result:
         | {
             mode: "ignored";
             reason: "no_pending";
             lastHistoryId: string;
             pendingMaxHistoryId: string;
+            changes: MailChange[];
           }
         | {
             mode: "done";
             lastHistoryId: string;
             pendingMaxHistoryId: string;
-          } = {
-        mode: "ignored",
-        reason: "no_pending",
-        lastHistoryId: "0",
-        pendingMaxHistoryId: "0"
-      };
+            changes: MailChange[];
+          };
 
-      while (drainPasses < maxDrainPasses) {
-        const passResult = await withTenantClient(tenantId, async (client) => {
-          const existsResult = await client.query(
+      if (BigInt(stateBeforeSync.pendingMaxHistoryId) <= BigInt(stateBeforeSync.lastHistoryId)) {
+        result = {
+          mode: "ignored",
+          reason: "no_pending",
+          lastHistoryId: stateBeforeSync.lastHistoryId,
+          pendingMaxHistoryId: stateBeforeSync.pendingMaxHistoryId,
+          changes: []
+        };
+      } else {
+        const syncResult = await syncMailbox({
+          cursorStore: mailboxCursorStore,
+          provider: gmailMailboxSyncProvider,
+          request: {
+            tenantId,
+            mailboxId,
+            commitCursor: true
+          }
+        });
+
+        const stateAfterSync = await withTenantClient(tenantId, async (client) => {
+          const result = await client.query(
             `
-              SELECT 1
+              SELECT
+                last_history_id::text AS last_history_id,
+                pending_max_history_id::text AS pending_max_history_id
               FROM mailbox_sync_state
               WHERE tenant_id = $1
                 AND mailbox_id = $2
                 AND provider = $3
-              FOR UPDATE
+              LIMIT 1
             `,
             [tenantId, mailboxId, provider]
           );
-          if (existsResult.rowCount === 0) {
-            throw new Error("mailbox_sync_state missing for mailbox/provider");
-          }
-
-          await client.query(
-            `
-              UPDATE mailbox_sync_state
-              SET
-                pending_max_history_id = GREATEST(pending_max_history_id, last_history_id),
-                updated_at = now()
-              WHERE tenant_id = $1
-                AND mailbox_id = $2
-                AND provider = $3
-            `,
-            [tenantId, mailboxId, provider]
-          );
-
-          const advancedResult = await client.query(
-            `
-              UPDATE mailbox_sync_state
-              SET
-                last_history_id = pending_max_history_id,
-                last_processed_at = now(),
-                enqueued_at = NULL,
-                enqueued_job_id = NULL,
-                last_error = NULL,
-                updated_at = now()
-              WHERE tenant_id = $1
-                AND mailbox_id = $2
-                AND provider = $3
-                AND pending_max_history_id > last_history_id
-              RETURNING
-                last_history_id::text AS last_history_id,
-                pending_max_history_id::text AS pending_max_history_id
-            `,
-            [tenantId, mailboxId, provider]
-          );
-          const advancedRow = advancedResult.rows[0] as
+          const row = result.rows[0] as
             | { last_history_id?: string; pending_max_history_id?: string }
             | undefined;
-          if (advancedRow) {
-            return {
-              mode: "advanced",
-              lastHistoryId: String(advancedRow.last_history_id ?? "0"),
-              pendingMaxHistoryId: String(advancedRow.pending_max_history_id ?? "0")
-            } as const;
+          if (!row) {
+            throw new Error("mailbox_sync_state missing after sync");
           }
-
-          const idleResult = await client.query(
-            `
-              UPDATE mailbox_sync_state
-              SET
-                enqueued_at = NULL,
-                enqueued_job_id = NULL,
-                updated_at = now()
-              WHERE tenant_id = $1
-                AND mailbox_id = $2
-                AND provider = $3
-              RETURNING
-                last_history_id::text AS last_history_id,
-                pending_max_history_id::text AS pending_max_history_id
-            `,
-            [tenantId, mailboxId, provider]
-          );
-          const idleRow = idleResult.rows[0] as
-            | { last_history_id?: string; pending_max_history_id?: string }
-            | undefined;
-
           return {
-            mode: "idle",
-            lastHistoryId: String(idleRow?.last_history_id ?? "0"),
-            pendingMaxHistoryId: String(idleRow?.pending_max_history_id ?? "0")
-          } as const;
+            lastHistoryId: String(row.last_history_id ?? syncResult.nextHistoryId),
+            pendingMaxHistoryId: String(row.pending_max_history_id ?? syncResult.nextHistoryId)
+          };
         });
-
-        drainPasses += 1;
-
-        if (passResult.mode === "idle") {
-          if (drainPasses === 1) {
-            result = {
-              mode: "ignored",
-              reason: "no_pending",
-              lastHistoryId: passResult.lastHistoryId,
-              pendingMaxHistoryId: passResult.pendingMaxHistoryId
-            };
-          }
-          break;
-        }
 
         result = {
           mode: "done",
-          lastHistoryId: passResult.lastHistoryId,
-          pendingMaxHistoryId: passResult.pendingMaxHistoryId
+          lastHistoryId: stateAfterSync.lastHistoryId,
+          pendingMaxHistoryId: stateAfterSync.pendingMaxHistoryId,
+          changes: syncResult.changes
         };
       }
 
       mailboxRunToHistoryId = result.lastHistoryId;
-      const historyFetchBoundary = await fetchMailboxHistoryBoundaryStub({
-        tenantId,
-        mailboxId,
-        provider,
-        correlationId: mailboxRunCorrelationId,
-        fromHistoryId: mailboxRunFromHistoryId,
-        toHistoryId: mailboxRunToHistoryId
-      });
+      const fetchedCount = result.changes.length;
 
       if (mailboxRunId) {
         await withTenantClient(tenantId, async (client) => {
@@ -1125,7 +1300,7 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
               WHERE id = $1::uuid
                 AND tenant_id = $2::uuid
             `,
-            [mailboxRunId, tenantId, mailboxRunFromHistoryId, mailboxRunToHistoryId, historyFetchBoundary.fetchedCount]
+            [mailboxRunId, tenantId, mailboxRunFromHistoryId, mailboxRunToHistoryId, fetchedCount]
           );
         });
       }
@@ -1158,7 +1333,7 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
           runId: mailboxRunId,
           fromHistoryId: mailboxRunFromHistoryId,
           toHistoryId: mailboxRunToHistoryId,
-          fetchedCount: historyFetchBoundary.fetchedCount,
+          fetchedCount,
           elapsedMs: Date.now() - startedAt,
           jobId: job.id?.toString() ?? null,
           attempt,
@@ -1177,7 +1352,7 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
           maxAttempts,
           lastHistoryId: result.lastHistoryId,
           pendingMaxHistoryId: result.pendingMaxHistoryId,
-          drainPasses
+          drainPasses: result.mode === "ignored" ? 0 : 1
         })
       );
     } catch (error) {
