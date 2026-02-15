@@ -39,12 +39,16 @@ import {
   PIPELINE_QUEUE_NAMES,
   type FetchThreadJobPayload,
   type GenerateJobPayload,
+  type MailboxSyncJobPayload,
   type PipelineFlags,
   type PipelineStagePayloadMap,
   type RetrieveJobPayload,
   type TriageJobPayload,
   type WritebackJobPayload
 } from "./pipeline/types.js";
+import { BullMqDlqStore } from "./pipeline/dlq.js";
+import { runStageWithDlq } from "./pipeline/execution.js";
+import { replayDlqItems } from "./pipeline/replay.js";
 
 type DocsIngestionJob = {
   tenantId: string;
@@ -71,6 +75,7 @@ const triageQueueName = PIPELINE_QUEUE_NAMES.triage;
 const retrieveQueueName = PIPELINE_QUEUE_NAMES.retrieve;
 const generateQueueName = PIPELINE_QUEUE_NAMES.generate;
 const writebackQueueName = PIPELINE_QUEUE_NAMES.writeback;
+const mailboxDlqQueueName = "mailbox_dlq";
 
 type MailNotificationJob = {
   tenantId: string;
@@ -84,9 +89,7 @@ type MailNotificationJob = {
   emailAddress?: string | null;
 };
 
-type MailboxSyncJob = {
-  tenantId?: string;
-  mailboxId?: string;
+type MailboxSyncJob = MailboxSyncJobPayload & {
   provider?: "gmail";
 };
 
@@ -138,6 +141,7 @@ const mailboxSyncEnqueueEnabled = process.env.MAILBOX_SYNC_ENQUEUE === "1";
 const mailboxSyncDraftWritebackEnabled = process.env.MAILBOX_SYNC_DRAFT_WRITEBACK === "1";
 const mailboxSyncApplyLabelsEnabled = process.env.MAILBOX_SYNC_APPLY_LABELS === "1";
 const killSwitchRefreshMs = Number.parseInt(process.env.MAILBOX_KILL_SWITCH_REFRESH_MS ?? "30000", 10);
+const mailboxDlqReplayEnabled = process.env.MAILBOX_DLQ_REPLAY === "1";
 
 function toSafeStack(stack: string | undefined): string | undefined {
   if (!stack) {
@@ -525,6 +529,10 @@ const generateQueue = new Queue<GenerateJobPayload>(generateQueueName, {
 const writebackQueue = new Queue<WritebackJobPayload>(writebackQueueName, {
   connection: redisConnection
 });
+const mailboxDlqQueue = new Queue(mailboxDlqQueueName, {
+  connection: redisConnection
+});
+const mailboxDlqStore = new BullMqDlqStore(mailboxDlqQueue);
 
 const pipelineFlags: PipelineFlags = {
   syncEnqueueEnabled: mailboxSyncEnqueueEnabled,
@@ -632,6 +640,65 @@ const pipelineHandlers = createPipelineStageHandlers({
     getLabelsKillSwitchDecision: (tenantId) => killSwitchService.getLabelsDecision(tenantId)
   }
 });
+
+async function runPipelineStageWithDlq<TPayload, TResult>(input: {
+  stage: "mailbox_sync" | keyof PipelineStagePayloadMap;
+  payload: TPayload;
+  job: { discard: () => void };
+  run: () => Promise<TResult>;
+}): Promise<TResult> {
+  return runStageWithDlq({
+    stage: input.stage,
+    payload: input.payload,
+    job: input.job,
+    dlqStore: mailboxDlqStore,
+    run: input.run,
+    defaultState: "needs_review",
+    defaultReasonCode: "PROVIDER_ERROR"
+  });
+}
+
+async function runDlqReplayOnStartup() {
+  if (!mailboxDlqReplayEnabled) {
+    return;
+  }
+
+  const replayLimitRaw = Number.parseInt(process.env.MAILBOX_DLQ_REPLAY_LIMIT ?? "50", 10);
+  const replayLimit = Number.isFinite(replayLimitRaw) && replayLimitRaw > 0 ? replayLimitRaw : 50;
+  const replayTenant = process.env.MAILBOX_DLQ_REPLAY_TENANT;
+  const replayStageRaw = process.env.MAILBOX_DLQ_REPLAY_STAGE;
+  const replayStage =
+    replayStageRaw === "fetch_thread" ||
+    replayStageRaw === "triage" ||
+    replayStageRaw === "retrieve" ||
+    replayStageRaw === "generate" ||
+    replayStageRaw === "writeback" ||
+    replayStageRaw === "mailbox_sync"
+      ? replayStageRaw
+      : undefined;
+
+  const result = await replayDlqItems({
+    dlqStore: mailboxDlqStore,
+    filters: {
+      tenantId: replayTenant,
+      stage: replayStage,
+      limit: replayLimit
+    },
+    enqueueStage: enqueuePipelineStage
+  });
+
+  // eslint-disable-next-line no-console
+  console.log(
+    JSON.stringify({
+      event: "mailbox.dlq.replay.done",
+      scanned: result.scanned,
+      replayed: result.replayed,
+      tenantId: replayTenant ?? null,
+      stage: replayStage ?? null,
+      limit: replayLimit
+    })
+  );
+}
 
 type IngestionTransitionResult =
   | { mode: "started" }
@@ -1505,10 +1572,20 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
         };
       } else {
         const syncResult = mailboxPipelineEnabled
-          ? await pipelineHandlers.handleMailboxSync({
-              tenantId,
-              mailboxId,
-              userId: "me"
+          ? await runPipelineStageWithDlq({
+              stage: "mailbox_sync",
+              payload: {
+                tenantId,
+                mailboxId,
+                userId: "me"
+              },
+              job,
+              run: () =>
+                pipelineHandlers.handleMailboxSync({
+                  tenantId,
+                  mailboxId,
+                  userId: "me"
+                })
             })
           : await syncMailbox({
               cursorStore: mailboxCursorStore,
@@ -1752,13 +1829,19 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
 
 if (mailboxPipelineEnabled) {
   killSwitchService.start();
+  void runDlqReplayOnStartup();
 }
 
 const fetchThreadWorker = mailboxPipelineEnabled
   ? new Worker<FetchThreadJobPayload>(
       fetchThreadQueueName,
       async (job) => {
-        await pipelineHandlers.handleFetchThread(job.data);
+        await runPipelineStageWithDlq({
+          stage: "fetch_thread",
+          payload: job.data,
+          job,
+          run: () => pipelineHandlers.handleFetchThread(job.data)
+        });
       },
       { connection: redisConnection, concurrency: 5 }
     )
@@ -1768,7 +1851,12 @@ const triageWorker = mailboxPipelineEnabled
   ? new Worker<TriageJobPayload>(
       triageQueueName,
       async (job) => {
-        await pipelineHandlers.handleTriage(job.data);
+        await runPipelineStageWithDlq({
+          stage: "triage",
+          payload: job.data,
+          job,
+          run: () => pipelineHandlers.handleTriage(job.data)
+        });
       },
       { connection: redisConnection, concurrency: 5 }
     )
@@ -1778,7 +1866,12 @@ const retrieveWorker = mailboxPipelineEnabled
   ? new Worker<RetrieveJobPayload>(
       retrieveQueueName,
       async (job) => {
-        await pipelineHandlers.handleRetrieve(job.data);
+        await runPipelineStageWithDlq({
+          stage: "retrieve",
+          payload: job.data,
+          job,
+          run: () => pipelineHandlers.handleRetrieve(job.data)
+        });
       },
       { connection: redisConnection, concurrency: 5 }
     )
@@ -1788,7 +1881,12 @@ const generateWorker = mailboxPipelineEnabled
   ? new Worker<GenerateJobPayload>(
       generateQueueName,
       async (job) => {
-        await pipelineHandlers.handleGenerate(job.data);
+        await runPipelineStageWithDlq({
+          stage: "generate",
+          payload: job.data,
+          job,
+          run: () => pipelineHandlers.handleGenerate(job.data)
+        });
       },
       { connection: redisConnection, concurrency: 5 }
     )
@@ -1798,7 +1896,12 @@ const writebackWorker = mailboxPipelineEnabled
   ? new Worker<WritebackJobPayload>(
       writebackQueueName,
       async (job) => {
-        const result = await pipelineHandlers.handleWriteback(job.data);
+        const result = await runPipelineStageWithDlq({
+          stage: "writeback",
+          payload: job.data,
+          job,
+          run: () => pipelineHandlers.handleWriteback(job.data)
+        });
         // eslint-disable-next-line no-console
         console.log(
           JSON.stringify({
@@ -1842,6 +1945,7 @@ console.log(
     pipelineEnabled: mailboxPipelineEnabled,
     syncEnqueueEnabled: mailboxSyncEnqueueEnabled,
     draftWritebackEnabled: mailboxSyncDraftWritebackEnabled,
-    applyLabelsEnabled: mailboxSyncApplyLabelsEnabled
+    applyLabelsEnabled: mailboxSyncApplyLabelsEnabled,
+    dlqReplayEnabled: mailboxDlqReplayEnabled
   })
 );
