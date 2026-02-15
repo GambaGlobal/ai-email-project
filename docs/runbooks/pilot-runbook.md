@@ -170,12 +170,24 @@ Invariants:
 - Only one `mailbox_sync` job is inflight per `(mailboxId, provider)`.
 - `pending_max_history_id` tracks the max HistoryId seen across burst notifications.
 - Worker advances `last_history_id` to `pending_max_history_id` and clears enqueue markers.
+- DB invariant is enforced: `pending_max_history_id >= last_history_id`.
 
 Run deterministic coalescing smoke:
 1. `pnpm -w smoke:notify-coalesce`
 
 Inspect mailbox cursor state:
 - `psql "$DATABASE_URL" -c "SELECT tenant_id, mailbox_id, provider, last_history_id, pending_max_history_id, enqueued_job_id, enqueued_at, last_error, updated_at FROM mailbox_sync_state WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid ORDER BY updated_at DESC LIMIT 5;"`
+
+## Gmail HistoryId safety
+Rules:
+- Treat Gmail `historyId` as a digits-only string end-to-end; never cast to JS `Number`.
+- Mailbox cursor state remains monotonic with DB-enforced invariant `pending_max_history_id >= last_history_id`.
+
+Run deterministic precision smoke (>2^53):
+1. `pnpm -w smoke:notify-historyid`
+
+Expected result:
+- `PASS: smoke:notify-historyid correlationId=<CID> mailboxId=<MAILBOX_ID> historyId=9007199254740993`
 
 ## One-command local dev
 Use this for a single-command bring-up/tear-down loop:

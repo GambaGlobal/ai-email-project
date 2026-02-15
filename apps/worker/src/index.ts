@@ -631,11 +631,9 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
 
       while (drainPasses < maxDrainPasses) {
         const passResult = await withTenantClient(tenantId, async (client) => {
-          const stateResult = await client.query(
+          const existsResult = await client.query(
             `
-              SELECT
-                last_history_id::text AS last_history_id,
-                pending_max_history_id::text AS pending_max_history_id
+              SELECT 1
               FROM mailbox_sync_state
               WHERE tenant_id = $1
                 AND mailbox_id = $2
@@ -644,41 +642,24 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
             `,
             [tenantId, mailboxId, provider]
           );
-          const row = stateResult.rows[0] as
-            | { last_history_id?: string; pending_max_history_id?: string }
-            | undefined;
-
-          if (!row) {
+          if (existsResult.rowCount === 0) {
             throw new Error("mailbox_sync_state missing for mailbox/provider");
           }
 
-          const lastHistoryId = String(row.last_history_id ?? "0");
-          const pendingMaxHistoryId = String(row.pending_max_history_id ?? "0");
-          const hasPending = BigInt(pendingMaxHistoryId) > BigInt(lastHistoryId);
-
-          if (!hasPending) {
-            await client.query(
-              `
-                UPDATE mailbox_sync_state
-                SET
-                  enqueued_at = NULL,
-                  enqueued_job_id = NULL,
-                  updated_at = now()
-                WHERE tenant_id = $1
-                  AND mailbox_id = $2
-                  AND provider = $3
-              `,
-              [tenantId, mailboxId, provider]
-            );
-
-            return {
-              mode: "idle",
-              lastHistoryId,
-              pendingMaxHistoryId
-            } as const;
-          }
-
           await client.query(
+            `
+              UPDATE mailbox_sync_state
+              SET
+                pending_max_history_id = GREATEST(pending_max_history_id, last_history_id),
+                updated_at = now()
+              WHERE tenant_id = $1
+                AND mailbox_id = $2
+                AND provider = $3
+            `,
+            [tenantId, mailboxId, provider]
+          );
+
+          const advancedResult = await client.query(
             `
               UPDATE mailbox_sync_state
               SET
@@ -691,14 +672,48 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
               WHERE tenant_id = $1
                 AND mailbox_id = $2
                 AND provider = $3
+                AND pending_max_history_id > last_history_id
+              RETURNING
+                last_history_id::text AS last_history_id,
+                pending_max_history_id::text AS pending_max_history_id
             `,
             [tenantId, mailboxId, provider]
           );
+          const advancedRow = advancedResult.rows[0] as
+            | { last_history_id?: string; pending_max_history_id?: string }
+            | undefined;
+          if (advancedRow) {
+            return {
+              mode: "advanced",
+              lastHistoryId: String(advancedRow.last_history_id ?? "0"),
+              pendingMaxHistoryId: String(advancedRow.pending_max_history_id ?? "0")
+            } as const;
+          }
+
+          const idleResult = await client.query(
+            `
+              UPDATE mailbox_sync_state
+              SET
+                enqueued_at = NULL,
+                enqueued_job_id = NULL,
+                updated_at = now()
+              WHERE tenant_id = $1
+                AND mailbox_id = $2
+                AND provider = $3
+              RETURNING
+                last_history_id::text AS last_history_id,
+                pending_max_history_id::text AS pending_max_history_id
+            `,
+            [tenantId, mailboxId, provider]
+          );
+          const idleRow = idleResult.rows[0] as
+            | { last_history_id?: string; pending_max_history_id?: string }
+            | undefined;
 
           return {
-            mode: "advanced",
-            lastHistoryId: pendingMaxHistoryId,
-            pendingMaxHistoryId
+            mode: "idle",
+            lastHistoryId: String(idleRow?.last_history_id ?? "0"),
+            pendingMaxHistoryId: String(idleRow?.pending_max_history_id ?? "0")
           } as const;
         });
 

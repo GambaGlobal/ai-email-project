@@ -192,7 +192,10 @@ async function coalesceMailboxSync(input: {
         ON CONFLICT (tenant_id, mailbox_id, provider)
         DO UPDATE
         SET
-          pending_max_history_id = GREATEST(mailbox_sync_state.pending_max_history_id, EXCLUDED.pending_max_history_id),
+          pending_max_history_id = GREATEST(
+            COALESCE(mailbox_sync_state.pending_max_history_id, COALESCE(mailbox_sync_state.last_history_id, 0)),
+            EXCLUDED.pending_max_history_id
+          ),
           last_correlation_id = EXCLUDED.last_correlation_id,
           pending_updated_at = now(),
           updated_at = now()
