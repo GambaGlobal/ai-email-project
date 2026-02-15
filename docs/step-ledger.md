@@ -120,3 +120,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.10.1 | 2026-02-15 | SELF | Phase 10 closeout v1 + evidence gate + Phase 11 entry criteria. | Evidence: `pnpm -w repo:check`. |
 | 11.1 | 2026-02-15 | SELF | Added Phase 11 v1 data map + data classification baseline for sales/security review and engineering minimization guardrails. | Evidence: `pnpm -w repo:check`. |
 | 11.2 | 2026-02-15 | SELF | Added Phase 11 v1 tenant isolation requirements spec across DB, storage, queue, observability, admin, and provider boundaries. | Evidence: `pnpm -w repo:check`. |
+| 11.3 | 2026-02-15 | SELF | Added Phase 11 v1 token storage and secrets posture spec covering OAuth lifecycle, encryption posture, access boundaries, rotation/revocation, audit, and redaction rules. | Evidence: `pnpm -w repo:check`. |
