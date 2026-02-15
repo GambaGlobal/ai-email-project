@@ -125,3 +125,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 11.5 | 2026-02-15 | SELF | Added Phase 11 v1 plain-language security and privacy FAQ for operators/procurement aligned to data, isolation, token, and retention posture docs. | Evidence: `pnpm -w repo:check`. |
 | 11.6 | 2026-02-15 | SELF | Added Phase 11 v1 lite questionnaire pack with vendor security and privacy/data handling Q&A, status tags, evidence links, and explicit not-yet gaps. | Evidence: `pnpm -w repo:check`. |
 | 11.7 | 2026-02-15 | SELF | Added DR-0012 to freeze Phase 11 security/privacy/retention trust posture, tradeoffs, and evidence references for sales and engineering guardrails. | Evidence: `pnpm -w repo:check`. |
+| 11.8 | 2026-02-15 | SELF | Added Phase 11 closeout doc with summary, evidence gate mapping, milestone map, completed step hashes, risks/open questions, and Phase 12 recommendations. | Evidence: `pnpm -w repo:check`. |
