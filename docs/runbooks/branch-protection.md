@@ -18,25 +18,34 @@
 3. Open `Artifacts`.
 4. Download `ci-smoke-logs`.
 
-## PR Proof Checklist
-1. Open the PR and confirm check `CI / smoke-gate` starts automatically.
-2. Confirm the run executes smoke sequence:
-   - `smoke:correlation`
-   - `smoke:notify-dedupe`
-   - `smoke:notify-fanout`
-   - `smoke:notify-coalesce`
-   - `smoke:notify-historyid`
-   - `smoke:notify-poison`
-   - `smoke:mailbox-sync-run`
-3. If the check fails, download `ci-smoke-logs` and inspect by correlation id:
-   - `rg -a "<correlationId>" /tmp/ai-email-api.log`
-   - `rg -a "<correlationId>" /tmp/ai-email-worker.log`
+## CI proof (deterministic)
+Required-check existence proof:
+1. Open `Settings` -> `Branches` -> `Branch protection rules`.
+2. Add or edit rule for `main`.
+3. Enable `Require status checks to pass before merging`.
+4. Search and select `CI / smoke-gate`.
 
-## Local Mirror Of CI
-- `pnpm -w install --frozen-lockfile`
+PR run proof:
+1. Open the PR.
+2. Open the `Checks` tab.
+3. Verify `CI / smoke-gate` ran and is green.
+
+Failure artifact proof:
+1. From PR `Checks`, open `Details` for `CI / smoke-gate`.
+2. In Actions run details, open `Artifacts`.
+3. Download `ci-smoke-logs`.
+
+Copy/paste PR checklist:
+```md
+- [ ] CI / smoke-gate ran on this PR
+- [ ] smoke-gate passed (or failure investigated via ci-smoke-logs)
+- [ ] Local mirror command sequence executed (optional but recommended)
+```
+
+Local mirror of CI:
 - `pnpm -w repo:check`
-- `pnpm -w db:migrate`
-- Start API and worker.
+- `pnpm -w dev:down || true`
+- `pnpm -w dev:up`
 - `pnpm -w smoke:correlation`
 - `pnpm -w smoke:notify-dedupe`
 - `pnpm -w smoke:notify-fanout`
@@ -44,3 +53,6 @@
 - `pnpm -w smoke:notify-historyid`
 - `pnpm -w smoke:notify-poison`
 - `pnpm -w smoke:mailbox-sync-run`
+- `pnpm -w dev:down`
+
+Note: full validation is enforced on PR/push in GitHub; this local mirror reduces surprises before push.

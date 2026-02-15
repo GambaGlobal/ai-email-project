@@ -520,6 +520,7 @@ In GitHub:
 For exact setup/troubleshooting/proof steps, see `docs/runbooks/branch-protection.md`:
 - required check name: `CI / smoke-gate`
 - failure artifact path: `Actions -> <workflow run> -> Artifacts -> ci-smoke-logs`
+- CI proof checklist section: `CI proof (deterministic)`
 
 ## Redis (macOS, no Docker)
 Use this as the default local setup path when Docker is unavailable:
