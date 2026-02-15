@@ -31,6 +31,7 @@ import type {
   TriageJobPayload,
   WritebackJobPayload
 } from "./types.js";
+import type { KillSwitchDecision } from "./kill-switch.js";
 
 const DEFAULT_USER_ID = "me";
 const DEFAULT_DRAFT_SUBJECT = "Re: (no subject)";
@@ -119,6 +120,8 @@ type PipelineStageDependencies = {
   ensureLabels: EnsureLabelsFn;
   setThreadStateLabels: SetStateLabelsFn;
   enqueueStage: EnqueueStageFn;
+  getWritebackKillSwitchDecision: (tenantId: string) => Promise<KillSwitchDecision>;
+  getLabelsKillSwitchDecision: (tenantId: string) => Promise<KillSwitchDecision>;
 };
 
 function buildLabelCache(ensureLabels: EnsureLabelsFn): (input: {
@@ -289,7 +292,8 @@ export function createPipelineStageHandlers(input: {
       let reasonCode: ThreadStateReasonCode = job.triageDecision.reasonCode;
       let upsertResult: UpsertThreadDraftResponse | undefined;
 
-      if (flags.draftWritebackEnabled && state === "drafted") {
+      const writebackDecision = await deps.getWritebackKillSwitchDecision(job.tenantId);
+      if (flags.draftWritebackEnabled && writebackDecision.enabled && state === "drafted") {
         try {
           upsertResult = await deps.upsertThreadDraft({
             tenantId: job.tenantId,
@@ -311,7 +315,8 @@ export function createPipelineStageHandlers(input: {
         }
       }
 
-      if (flags.applyLabelsEnabled) {
+      const labelsDecision = await deps.getLabelsKillSwitchDecision(job.tenantId);
+      if (flags.applyLabelsEnabled && labelsDecision.enabled) {
         const labelIdsByKey = await getLabelIds({
           tenantId: job.tenantId,
           mailboxId: job.mailboxId as MailboxId,

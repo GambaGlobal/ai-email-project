@@ -76,6 +76,12 @@ test("mailbox sync stage groups by thread and enqueues deterministic fetch_threa
             triggeringMessageId: (input.payload as { triggeringMessageId: string }).triggeringMessageId
           }
         });
+      },
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
       }
     }
   });
@@ -153,6 +159,12 @@ test("fetch_thread stage enqueues triage with normalized thread", async () => {
         if (input.stage === "triage") {
           triagePayloads.push(input.payload);
         }
+      },
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
       }
     }
   });
@@ -208,7 +220,13 @@ test("writeback stage respects env gating and maps MissingRecipientError determi
       async setThreadStateLabels(input) {
         labelStates.push(input.state);
       },
-      async enqueueStage() {}
+      async enqueueStage() {},
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      }
     }
   });
 
@@ -270,7 +288,13 @@ test("writeback stage does not call provider when draft writeback is disabled", 
         };
       },
       async setThreadStateLabels() {},
-      async enqueueStage() {}
+      async enqueueStage() {},
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      }
     }
   });
 
@@ -331,7 +355,13 @@ test("writeback stage caches ensured labels per tenant/mailbox/user", async () =
         };
       },
       async setThreadStateLabels() {},
-      async enqueueStage() {}
+      async enqueueStage() {},
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      }
     }
   });
 
@@ -361,4 +391,139 @@ test("writeback stage caches ensured labels per tenant/mailbox/user", async () =
   });
 
   assert.equal(ensureCalls, 1);
+});
+
+test("writeback stage does not call provider when kill switch disables writeback", async () => {
+  let upsertCalls = 0;
+
+  const handlers = createPipelineStageHandlers({
+    flags: {
+      syncEnqueueEnabled: true,
+      draftWritebackEnabled: true,
+      applyLabelsEnabled: false
+    },
+    deps: {
+      async runSyncMailbox() {
+        return {
+          startHistoryId: "0",
+          nextHistoryId: "0",
+          changes: [],
+          mode: "bootstrap"
+        };
+      },
+      async commitCursor() {},
+      async fetchThread() {
+        return createThread("thread-1");
+      },
+      async upsertThreadDraft() {
+        upsertCalls += 1;
+        return { action: "created" };
+      },
+      async ensureLabels() {
+        return {
+          labelIdsByKey: {
+            ai_drafted: "lbl-1" as LabelId,
+            ai_needs_review: "lbl-2" as LabelId,
+            ai_blocked: "lbl-3" as LabelId
+          }
+        };
+      },
+      async setThreadStateLabels() {},
+      async enqueueStage() {},
+      async getWritebackKillSwitchDecision() {
+        return { enabled: false, reason: "env_global_kill" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      }
+    }
+  });
+
+  const result = await handlers.handleWriteback({
+    tenantId: "tenant-1",
+    mailboxId: "mailbox-1",
+    userId: "me",
+    threadId: "thread-1",
+    triggeringMessageId: "msg-2",
+    thread: createThread("thread-1"),
+    subject: "Re: Trip details",
+    bodyText: "Holding reply",
+    idempotencyKey: "tenant-1:mailbox-1:msg-2",
+    triageDecision: {
+      state: "drafted",
+      reasonCode: "OK_DRAFTED"
+    }
+  });
+
+  assert.equal(upsertCalls, 0);
+  assert.equal(result.state, "drafted");
+});
+
+test("writeback stage does not apply labels when kill switch disables labels", async () => {
+  let ensureCalls = 0;
+  let setCalls = 0;
+
+  const handlers = createPipelineStageHandlers({
+    flags: {
+      syncEnqueueEnabled: true,
+      draftWritebackEnabled: false,
+      applyLabelsEnabled: true
+    },
+    deps: {
+      async runSyncMailbox() {
+        return {
+          startHistoryId: "0",
+          nextHistoryId: "0",
+          changes: [],
+          mode: "bootstrap"
+        };
+      },
+      async commitCursor() {},
+      async fetchThread() {
+        return createThread("thread-1");
+      },
+      async upsertThreadDraft() {
+        return { action: "created" };
+      },
+      async ensureLabels() {
+        ensureCalls += 1;
+        return {
+          labelIdsByKey: {
+            ai_drafted: "lbl-1" as LabelId,
+            ai_needs_review: "lbl-2" as LabelId,
+            ai_blocked: "lbl-3" as LabelId
+          }
+        };
+      },
+      async setThreadStateLabels() {
+        setCalls += 1;
+      },
+      async enqueueStage() {},
+      async getWritebackKillSwitchDecision() {
+        return { enabled: true, reason: "enabled" };
+      },
+      async getLabelsKillSwitchDecision() {
+        return { enabled: false, reason: "env_tenant_kill" };
+      }
+    }
+  });
+
+  await handlers.handleWriteback({
+    tenantId: "tenant-1",
+    mailboxId: "mailbox-1",
+    userId: "me",
+    threadId: "thread-1",
+    triggeringMessageId: "msg-2",
+    thread: createThread("thread-1"),
+    subject: "Re: Trip details",
+    bodyText: "Holding reply",
+    idempotencyKey: "tenant-1:mailbox-1:msg-2",
+    triageDecision: {
+      state: "drafted",
+      reasonCode: "OK_DRAFTED"
+    }
+  });
+
+  assert.equal(ensureCalls, 0);
+  assert.equal(setCalls, 0);
 });

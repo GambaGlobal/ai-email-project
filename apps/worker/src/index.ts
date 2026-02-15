@@ -34,6 +34,7 @@ import {
   type MailboxSyncProvider
 } from "./mailbox-sync.js";
 import { createPipelineStageHandlers } from "./pipeline/stages.js";
+import { EnvKillSwitchStore, KillSwitchService } from "./pipeline/kill-switch.js";
 import {
   PIPELINE_QUEUE_NAMES,
   type FetchThreadJobPayload,
@@ -136,6 +137,7 @@ const mailboxPipelineEnabled = process.env.MAILBOX_PIPELINE_ENABLED === "1";
 const mailboxSyncEnqueueEnabled = process.env.MAILBOX_SYNC_ENQUEUE === "1";
 const mailboxSyncDraftWritebackEnabled = process.env.MAILBOX_SYNC_DRAFT_WRITEBACK === "1";
 const mailboxSyncApplyLabelsEnabled = process.env.MAILBOX_SYNC_APPLY_LABELS === "1";
+const killSwitchRefreshMs = Number.parseInt(process.env.MAILBOX_KILL_SWITCH_REFRESH_MS ?? "30000", 10);
 
 function toSafeStack(stack: string | undefined): string | undefined {
   if (!stack) {
@@ -529,6 +531,29 @@ const pipelineFlags: PipelineFlags = {
   draftWritebackEnabled: mailboxSyncDraftWritebackEnabled,
   applyLabelsEnabled: mailboxSyncApplyLabelsEnabled
 };
+const killSwitchService = new KillSwitchService({
+  store: new EnvKillSwitchStore(process.env),
+  refreshMs: Number.isFinite(killSwitchRefreshMs) && killSwitchRefreshMs > 0 ? killSwitchRefreshMs : 30_000,
+  env: process.env,
+  logger: (event) => {
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify({
+        event: event.event,
+        tenantId: event.tenantId ?? null,
+        control: event.control ?? null,
+        reason: event.reason ?? null,
+        refreshMs: event.refreshMs ?? null,
+        globalKillWriteback: event.globalKillWriteback ?? null,
+        globalKillLabels: event.globalKillLabels ?? null,
+        tenantKillWritebackCount: event.tenantKillWritebackCount ?? null,
+        tenantKillLabelsCount: event.tenantKillLabelsCount ?? null,
+        changed: event.changed ?? null,
+        error: event.error ?? null
+      })
+    );
+  }
+});
 
 const enqueuePipelineStage = async (input: {
   stage: keyof PipelineStagePayloadMap;
@@ -602,7 +627,9 @@ const pipelineHandlers = createPipelineStageHandlers({
         state: input.state,
         labelIdsByKey: input.labelIdsByKey
       }),
-    enqueueStage: enqueuePipelineStage
+    enqueueStage: enqueuePipelineStage,
+    getWritebackKillSwitchDecision: (tenantId) => killSwitchService.getWritebackDecision(tenantId),
+    getLabelsKillSwitchDecision: (tenantId) => killSwitchService.getLabelsDecision(tenantId)
   }
 });
 
@@ -1722,6 +1749,10 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
     connection: redisConnection
   }
 );
+
+if (mailboxPipelineEnabled) {
+  killSwitchService.start();
+}
 
 const fetchThreadWorker = mailboxPipelineEnabled
   ? new Worker<FetchThreadJobPayload>(
