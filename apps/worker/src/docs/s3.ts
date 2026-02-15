@@ -117,6 +117,13 @@ export async function downloadDocObject(input: {
   );
 
   const maxBytes = input.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
+  if (
+    typeof response.ContentLength === "number" &&
+    Number.isFinite(response.ContentLength) &&
+    response.ContentLength > maxBytes
+  ) {
+    throw new Error("FILE_TOO_LARGE");
+  }
   const body = await streamToBuffer(response.Body, maxBytes);
 
   return {

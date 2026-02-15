@@ -731,6 +731,7 @@ type DocVersionRow = {
 type IngestionErrorCode =
   | "DOC_VERSION_NOT_FOUND"
   | "RAW_FILE_KEY_MISSING"
+  | "FILE_TOO_LARGE"
   | "S3_GET_FAILED"
   | "S3_PUT_FAILED"
   | "UNSUPPORTED_TYPE"
@@ -987,6 +988,9 @@ async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): P
 
     const rawObject = await downloadDocObject({ key: version.raw_file_key }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
+      if (message === "FILE_TOO_LARGE") {
+        throw new DocIngestionError("FILE_TOO_LARGE", "Raw file exceeds max ingestion size");
+      }
       throw new DocIngestionError("S3_GET_FAILED", message);
     });
     const extracted = await extractText({
