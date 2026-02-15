@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDecipheriv } from "node:crypto";
-import { UnrecoverableError, Worker } from "bullmq";
+import { Queue, UnrecoverableError, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
 import { GmailProvider } from "../../../packages/mail-gmail/src/gmail-provider.js";
@@ -12,7 +12,9 @@ import {
   type LabelId,
   type LabelKey,
   type MailboxId,
+  type MailBody,
   type MailChange,
+  type MessageId,
   type ThreadId,
   type NormalizedThread,
   type UpsertThreadDraftResponse,
@@ -27,13 +29,21 @@ import {
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 import {
-  applyThreadStateLabelsForThreads,
-  collectThreadContextsForChanges,
-  decideThreadStateFromOutcome,
   syncMailbox,
   type MailboxCursorStore,
   type MailboxSyncProvider
 } from "./mailbox-sync.js";
+import { createPipelineStageHandlers } from "./pipeline/stages.js";
+import {
+  PIPELINE_QUEUE_NAMES,
+  type FetchThreadJobPayload,
+  type GenerateJobPayload,
+  type PipelineFlags,
+  type PipelineStagePayloadMap,
+  type RetrieveJobPayload,
+  type TriageJobPayload,
+  type WritebackJobPayload
+} from "./pipeline/types.js";
 
 type DocsIngestionJob = {
   tenantId: string;
@@ -54,7 +64,12 @@ type DocsIngestionJob = {
 const workerName = process.env.WORKER_NAME ?? "worker";
 const docsQueueName = "docs_ingestion";
 const mailNotificationsQueueName = "mail_notifications";
-const mailboxSyncQueueName = "mailbox_sync";
+const mailboxSyncQueueName = PIPELINE_QUEUE_NAMES.mailboxSync;
+const fetchThreadQueueName = PIPELINE_QUEUE_NAMES.fetchThread;
+const triageQueueName = PIPELINE_QUEUE_NAMES.triage;
+const retrieveQueueName = PIPELINE_QUEUE_NAMES.retrieve;
+const generateQueueName = PIPELINE_QUEUE_NAMES.generate;
+const writebackQueueName = PIPELINE_QUEUE_NAMES.writeback;
 
 type MailNotificationJob = {
   tenantId: string;
@@ -117,6 +132,10 @@ const redisConnection = new IORedis(process.env.REDIS_URL, {
 });
 
 const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const mailboxPipelineEnabled = process.env.MAILBOX_PIPELINE_ENABLED === "1";
+const mailboxSyncEnqueueEnabled = process.env.MAILBOX_SYNC_ENQUEUE === "1";
+const mailboxSyncDraftWritebackEnabled = process.env.MAILBOX_SYNC_DRAFT_WRITEBACK === "1";
+const mailboxSyncApplyLabelsEnabled = process.env.MAILBOX_SYNC_APPLY_LABELS === "1";
 
 function toSafeStack(stack: string | undefined): string | undefined {
   if (!stack) {
@@ -446,10 +465,146 @@ class GmailMailboxSyncProvider implements MailboxSyncProvider {
       }
     );
   }
+
+  async upsertThreadDraftForTenant(input: {
+    tenantId: string;
+    mailboxId: string;
+    threadId: ThreadId;
+    replyToMessageId: string;
+    subject: string;
+    bodyText: string;
+    idempotencyKey: string;
+  }): Promise<UpsertThreadDraftResponse> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    const body: MailBody = {
+      text: input.bodyText
+    };
+
+    return this.provider.upsertThreadDraft(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId,
+          tenantId: input.tenantId
+        }
+      },
+      {
+        threadId: input.threadId,
+        kind: "copilot_reply",
+        replyToMessageId: input.replyToMessageId as MessageId,
+        subject: input.subject,
+        body,
+        marker: {
+          draftKey: input.idempotencyKey,
+          version: 1
+        }
+      }
+    );
+  }
 }
 
 const mailboxCursorStore = new PgMailboxCursorStore();
 const gmailMailboxSyncProvider = new GmailMailboxSyncProvider();
+const fetchThreadQueue = new Queue<FetchThreadJobPayload>(fetchThreadQueueName, {
+  connection: redisConnection
+});
+const triageQueue = new Queue<TriageJobPayload>(triageQueueName, {
+  connection: redisConnection
+});
+const retrieveQueue = new Queue<RetrieveJobPayload>(retrieveQueueName, {
+  connection: redisConnection
+});
+const generateQueue = new Queue<GenerateJobPayload>(generateQueueName, {
+  connection: redisConnection
+});
+const writebackQueue = new Queue<WritebackJobPayload>(writebackQueueName, {
+  connection: redisConnection
+});
+
+const pipelineFlags: PipelineFlags = {
+  syncEnqueueEnabled: mailboxSyncEnqueueEnabled,
+  draftWritebackEnabled: mailboxSyncDraftWritebackEnabled,
+  applyLabelsEnabled: mailboxSyncApplyLabelsEnabled
+};
+
+const enqueuePipelineStage = async (input: {
+  stage: keyof PipelineStagePayloadMap;
+  payload: PipelineStagePayloadMap[keyof PipelineStagePayloadMap];
+  jobId: string;
+}) => {
+  const options = {
+    jobId: input.jobId,
+    attempts: DEFAULT_JOB_ATTEMPTS
+  };
+  switch (input.stage) {
+    case "fetch_thread":
+      await fetchThreadQueue.add("fetch_thread", input.payload as FetchThreadJobPayload, options);
+      break;
+    case "triage":
+      await triageQueue.add("triage", input.payload as TriageJobPayload, options);
+      break;
+    case "retrieve":
+      await retrieveQueue.add("retrieve", input.payload as RetrieveJobPayload, options);
+      break;
+    case "generate":
+      await generateQueue.add("generate", input.payload as GenerateJobPayload, options);
+      break;
+    case "writeback":
+      await writebackQueue.add("writeback", input.payload as WritebackJobPayload, options);
+      break;
+    default:
+      throw new Error(`Unknown pipeline stage: ${String(input.stage)}`);
+  }
+};
+
+const pipelineHandlers = createPipelineStageHandlers({
+  flags: pipelineFlags,
+  deps: {
+    runSyncMailbox: (request) =>
+      syncMailbox({
+        cursorStore: mailboxCursorStore,
+        provider: gmailMailboxSyncProvider,
+        request
+      }),
+    commitCursor: async ({ tenantId, mailboxId, nextHistoryId }) => {
+      await mailboxCursorStore.set(tenantId, mailboxId, nextHistoryId);
+    },
+    fetchThread: async ({ tenantId, mailboxId, threadId }) =>
+      gmailMailboxSyncProvider.getThread({
+        tenantId,
+        mailboxId,
+        threadId
+      }),
+    upsertThreadDraft: async (input) =>
+      gmailMailboxSyncProvider.upsertThreadDraftForTenant({
+        tenantId: input.tenantId,
+        mailboxId: input.mailboxId,
+        threadId: input.threadId,
+        replyToMessageId: input.triggeringMessageId,
+        subject: input.subject,
+        bodyText: input.bodyText,
+        idempotencyKey: input.idempotencyKey
+      }),
+    ensureLabels: async (input) =>
+      gmailMailboxSyncProvider.ensureLabelsForTenant({
+        tenantId: input.tenantId,
+        mailboxId: input.mailboxId,
+        labels: input.labels
+      }),
+    setThreadStateLabels: async (input) =>
+      gmailMailboxSyncProvider.setThreadStateLabelsForTenant({
+        tenantId: input.tenantId,
+        mailboxId: input.mailboxId,
+        threadId: input.threadId,
+        state: input.state,
+        labelIdsByKey: input.labelIdsByKey
+      }),
+    enqueueStage: enqueuePipelineStage
+  }
+});
 
 type IngestionTransitionResult =
   | { mode: "started" }
@@ -1322,84 +1477,42 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
           changes: []
         };
       } else {
-        const syncResult = await syncMailbox({
-          cursorStore: mailboxCursorStore,
-          provider: gmailMailboxSyncProvider,
-          request: {
-            tenantId,
-            mailboxId,
-            commitCursor: true
-          }
-        });
-
-        if (process.env.MAILBOX_SYNC_FETCH_THREADS === "1") {
-          const threadContexts = await collectThreadContextsForChanges({
-            tenantId,
-            mailboxId,
-            changes: syncResult.changes,
-            fetchThread: async ({ tenantId: threadTenantId, mailboxId: threadMailboxId, threadId }) =>
-              gmailMailboxSyncProvider.getThread({
-                tenantId: threadTenantId,
-                mailboxId: threadMailboxId,
-                threadId
-              })
-          });
-          // eslint-disable-next-line no-console
-          console.log(
-            JSON.stringify({
-              event: "mailbox.sync.thread_context.ready",
+        const syncResult = mailboxPipelineEnabled
+          ? await pipelineHandlers.handleMailboxSync({
               tenantId,
               mailboxId,
-              correlationId: mailboxRunCorrelationId,
-              threadCount: threadContexts.length
+              userId: "me"
             })
-          );
-        }
-
-        if (process.env.MAILBOX_SYNC_APPLY_LABELS === "1") {
-          const threadIds = Array.from(
-            new Set(syncResult.changes.map((change) => String(change.threadId)))
-          ).map((threadId) => threadId as ThreadId);
-
-          if (threadIds.length > 0) {
-            const decision = decideThreadStateFromOutcome({
-              upsertResult: { action: "created" } as UpsertThreadDraftResponse
-            });
-            const labelApplyResult = await applyThreadStateLabelsForThreads({
-              provider: {
-                ensureLabels: ({ labels }) =>
-                  gmailMailboxSyncProvider.ensureLabelsForTenant({
-                    tenantId,
-                    mailboxId,
-                    labels
-                  }),
-                setThreadStateLabels: ({ threadId, state, labelIdsByKey }) =>
-                  gmailMailboxSyncProvider.setThreadStateLabelsForTenant({
-                    tenantId,
-                    mailboxId,
-                    threadId,
-                    state,
-                    labelIdsByKey
-                  })
-              },
-              threadIds,
-              state: decision.state
-            });
-
-            // eslint-disable-next-line no-console
-            console.log(
-              JSON.stringify({
-                event: "mailbox.sync.state_labels.applied",
+          : await syncMailbox({
+              cursorStore: mailboxCursorStore,
+              provider: gmailMailboxSyncProvider,
+              request: {
                 tenantId,
                 mailboxId,
-                correlationId: mailboxRunCorrelationId,
-                state: decision.state,
-                reasonCode: decision.reasonCode,
-                threadCount: labelApplyResult.appliedThreadIds.length
-              })
-            );
-          }
-        }
+                commitCursor: true
+              }
+            });
+
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "mailbox.sync.pipeline",
+            tenantId,
+            mailboxId,
+            correlationId: mailboxRunCorrelationId,
+            pipelineEnabled: mailboxPipelineEnabled,
+            syncEnqueueEnabled: mailboxSyncEnqueueEnabled,
+            draftWritebackEnabled: mailboxSyncDraftWritebackEnabled,
+            applyLabelsEnabled: mailboxSyncApplyLabelsEnabled,
+            startHistoryId: syncResult.startHistoryId,
+            nextHistoryId: syncResult.nextHistoryId,
+            changeCount: syncResult.changes.length,
+            threadCount:
+              "threadCount" in syncResult ? syncResult.threadCount : undefined,
+            cursorCommitted:
+              "cursorCommitted" in syncResult ? syncResult.cursorCommitted : true
+          })
+        );
 
         const stateAfterSync = await withTenantClient(tenantId, async (client) => {
           const result = await client.query(
@@ -1610,6 +1723,68 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
   }
 );
 
+const fetchThreadWorker = mailboxPipelineEnabled
+  ? new Worker<FetchThreadJobPayload>(
+      fetchThreadQueueName,
+      async (job) => {
+        await pipelineHandlers.handleFetchThread(job.data);
+      },
+      { connection: redisConnection, concurrency: 5 }
+    )
+  : null;
+
+const triageWorker = mailboxPipelineEnabled
+  ? new Worker<TriageJobPayload>(
+      triageQueueName,
+      async (job) => {
+        await pipelineHandlers.handleTriage(job.data);
+      },
+      { connection: redisConnection, concurrency: 5 }
+    )
+  : null;
+
+const retrieveWorker = mailboxPipelineEnabled
+  ? new Worker<RetrieveJobPayload>(
+      retrieveQueueName,
+      async (job) => {
+        await pipelineHandlers.handleRetrieve(job.data);
+      },
+      { connection: redisConnection, concurrency: 5 }
+    )
+  : null;
+
+const generateWorker = mailboxPipelineEnabled
+  ? new Worker<GenerateJobPayload>(
+      generateQueueName,
+      async (job) => {
+        await pipelineHandlers.handleGenerate(job.data);
+      },
+      { connection: redisConnection, concurrency: 5 }
+    )
+  : null;
+
+const writebackWorker = mailboxPipelineEnabled
+  ? new Worker<WritebackJobPayload>(
+      writebackQueueName,
+      async (job) => {
+        const result = await pipelineHandlers.handleWriteback(job.data);
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "mailbox.pipeline.writeback.done",
+            tenantId: job.data.tenantId,
+            mailboxId: job.data.mailboxId,
+            threadId: job.data.threadId,
+            reasonCode: result.reasonCode,
+            state: result.state,
+            action: result.upsertResult?.action ?? "skipped"
+          })
+        );
+      },
+      { connection: redisConnection, concurrency: 5 }
+    )
+  : null;
+
 let readyLogPrinted = false;
 const emitWorkerReady = () => {
   if (readyLogPrinted) {
@@ -1623,3 +1798,19 @@ const emitWorkerReady = () => {
 ingestionWorker.on("ready", emitWorkerReady);
 mailNotificationsWorker.on("ready", emitWorkerReady);
 mailboxSyncWorker.on("ready", emitWorkerReady);
+fetchThreadWorker?.on("ready", emitWorkerReady);
+triageWorker?.on("ready", emitWorkerReady);
+retrieveWorker?.on("ready", emitWorkerReady);
+generateWorker?.on("ready", emitWorkerReady);
+writebackWorker?.on("ready", emitWorkerReady);
+
+// eslint-disable-next-line no-console
+console.log(
+  JSON.stringify({
+    event: "mailbox.pipeline.config",
+    pipelineEnabled: mailboxPipelineEnabled,
+    syncEnqueueEnabled: mailboxSyncEnqueueEnabled,
+    draftWritebackEnabled: mailboxSyncDraftWritebackEnabled,
+    applyLabelsEnabled: mailboxSyncApplyLabelsEnabled
+  })
+);
