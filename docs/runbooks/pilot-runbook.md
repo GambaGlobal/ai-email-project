@@ -167,6 +167,30 @@ Mail incident triage/monitoring:
 1. `REDIS_URL=\"redis://127.0.0.1:6379\" DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w ops:triage`
 2. `REDIS_URL=\"redis://127.0.0.1:6379\" DATABASE_URL=\"postgresql://127.0.0.1:5432/ai_email_dev\" TENANT_ID=\"00000000-0000-0000-0000-000000000001\" pnpm -w ops:monitor`
 
+## Recovery: Replay
+Use replay commands before manual SQL during incidents.
+
+When to use:
+1. `mail:receipts:replay` to re-enqueue/retry specific notification receipts (usually `received` or `failed_transient`).
+2. `mailbox:sync:replay` to re-enqueue mailbox cursor work when `pending_max_history_id > last_history_id`.
+
+Safety defaults:
+1. Both commands are dry-run by default.
+2. Apply requires explicit confirm flags:
+   `MAIL_RECEIPTS_REPLAY_CONFIRM=1` or `MAILBOX_SYNC_REPLAY_CONFIRM=1`.
+3. Tenant scope is required unless `ALLOW_ALL_TENANTS=1` is explicitly set.
+
+Do NOT replay if receipt status is terminal:
+- `done`, `ignored`, or `failed_permanent`.
+
+Examples:
+1. `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TENANT_ID="00000000-0000-0000-0000-000000000001" RECEIPT_ID="<receipt-id>" pnpm -w mail:receipts:replay`
+2. `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TENANT_ID="00000000-0000-0000-0000-000000000001" MAILBOX_ID="<mailbox-id>" pnpm -w mailbox:sync:replay`
+
+Expected final lines:
+- `OK mail:receipts:replay matched=<n> enqueued=<n> retried=<n> skipped=<n> dryRun=<0|1>`
+- `OK mailbox:sync:replay matched=<n> enqueued=<n> retried=<n> readd=<n> skipped=<n> dryRun=<0|1>`
+
 ## Gmail notifications fanout gate
 Guarantee:
 - Receipt dedupe happens first at DB boundary.
