@@ -6,6 +6,8 @@ import type {
   LabelId,
   MailBody,
   MailMessage,
+  ThreadState,
+  ThreadStateReasonCode,
   NormalizedThread,
   MailboxId,
   MessageId,
@@ -77,10 +79,31 @@ export interface EnsureLabelResponse {
   labelId: LabelId;
 }
 
+export type LabelKey = "ai_drafted" | "ai_needs_review" | "ai_blocked";
+
+export interface EnsureLabelsRequest {
+  labels: { key: LabelKey; name: string }[];
+}
+
+export interface EnsureLabelsResponse {
+  labelIdsByKey: Record<LabelKey, LabelId>;
+}
+
 export interface ModifyThreadLabelsRequest {
   threadId: ThreadId;
   add?: LabelId[];
   remove?: LabelId[];
+}
+
+export interface SetThreadStateLabelsRequest {
+  threadId: ThreadId;
+  state: ThreadState;
+  labelIdsByKey: Record<LabelKey, LabelId>;
+}
+
+export interface ThreadStateDecision {
+  state: ThreadState;
+  reasonCode: ThreadStateReasonCode;
 }
 
 export interface GetDraftRequest {
@@ -118,6 +141,14 @@ export interface MailProvider<Auth = unknown> {
   modifyThreadLabels(
     ctx: MailProviderContext<Auth>,
     req: ModifyThreadLabelsRequest
+  ): Promise<void>;
+  ensureLabels(
+    ctx: MailProviderContext<Auth>,
+    req: EnsureLabelsRequest
+  ): Promise<EnsureLabelsResponse>;
+  setThreadStateLabels(
+    ctx: MailProviderContext<Auth>,
+    req: SetThreadStateLabelsRequest
   ): Promise<void>;
   /**
    * Never overwrite if marker is missing or expectedPreviousFingerprint mismatches;

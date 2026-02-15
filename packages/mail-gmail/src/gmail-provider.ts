@@ -1,6 +1,10 @@
 import type {
   Cursor,
   DraftId,
+  LabelId,
+  LabelKey,
+  EnsureLabelsRequest,
+  EnsureLabelsResponse,
   EnsureLabelRequest,
   EnsureLabelResponse,
   GetThreadRequest,
@@ -15,6 +19,8 @@ import type {
   ModifyThreadLabelsRequest,
   MailProvider,
   MailProviderContext,
+  SetThreadStateLabelsRequest,
+  ThreadState,
   ThreadId,
   UpsertThreadDraftRequest,
   UpsertThreadDraftResponse
@@ -91,6 +97,20 @@ type GmailDraftResponse = {
   };
 };
 
+type GmailLabel = {
+  id?: string;
+  name?: string;
+};
+
+type GmailLabelsListResponse = {
+  labels?: GmailLabel[];
+};
+
+type GmailLabelCreateResponse = {
+  id?: string;
+  name?: string;
+};
+
 type GmailApiClient = {
   listHistory(input: {
     accessToken: string;
@@ -133,6 +153,22 @@ type GmailApiClient = {
     threadId: string;
     raw: string;
   }): Promise<GmailDraftResponse>;
+  listLabels(input: {
+    accessToken: string;
+    userId: string;
+  }): Promise<GmailLabelsListResponse>;
+  createLabel(input: {
+    accessToken: string;
+    userId: string;
+    name: string;
+  }): Promise<GmailLabelCreateResponse>;
+  modifyThreadLabels(input: {
+    accessToken: string;
+    userId: string;
+    threadId: string;
+    addLabelIds?: string[];
+    removeLabelIds?: string[];
+  }): Promise<void>;
 };
 
 type GmailAuth = {
@@ -156,6 +192,11 @@ const DEFAULT_USER_ID = "me";
 const MAX_RESULTS_PER_PAGE = 500;
 const MAX_BODY_TEXT_CHARS = 8000;
 const MAX_DRAFT_SCAN_RESULTS = 50;
+const AI_STATE_LABELS: { key: LabelKey; name: string }[] = [
+  { key: "ai_drafted", name: "AI Drafted" },
+  { key: "ai_needs_review", name: "AI Needs Review" },
+  { key: "ai_blocked", name: "AI Blocked" }
+];
 
 const gmailApiClient: GmailApiClient = {
   async listHistory(input) {
@@ -306,6 +347,70 @@ const gmailApiClient: GmailApiClient = {
       throw error;
     }
     return parseJsonResponse<GmailDraftResponse>(bodyText);
+  },
+  async listLabels(input) {
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/labels`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${input.accessToken}`
+        }
+      }
+    );
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail users.labels.list failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailLabelsListResponse>(bodyText);
+  },
+  async createLabel(input) {
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/labels`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${input.accessToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: input.name,
+          labelListVisibility: "labelShow",
+          messageListVisibility: "show"
+        })
+      }
+    );
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail users.labels.create failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailLabelCreateResponse>(bodyText);
+  },
+  async modifyThreadLabels(input) {
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/threads/${encodeURIComponent(input.threadId)}/modify`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${input.accessToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          addLabelIds: input.addLabelIds ?? [],
+          removeLabelIds: input.removeLabelIds ?? []
+        })
+      }
+    );
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail users.threads.modify failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
   }
 };
 
@@ -627,6 +732,20 @@ function extractRawBody(raw: string | undefined): string {
   return decoded;
 }
 
+function normalizeLabelName(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function stateToLabelKey(state: ThreadState): LabelKey {
+  if (state === "drafted") {
+    return "ai_drafted";
+  }
+  if (state === "needs_review") {
+    return "ai_needs_review";
+  }
+  return "ai_blocked";
+}
+
 const notImplemented = (method: string): never => {
   throw new NotImplementedError(
     `GmailProvider.${method} not implemented (Step 2.8 stub)`
@@ -637,8 +756,11 @@ export class GmailProvider implements MailProvider {
   kind: MailProvider["kind"] = "gmail";
   private readonly apiClient: GmailApiClient;
 
-  constructor(input?: { apiClient?: GmailApiClient }) {
-    this.apiClient = input?.apiClient ?? gmailApiClient;
+  constructor(input?: { apiClient?: Partial<GmailApiClient> }) {
+    this.apiClient = {
+      ...gmailApiClient,
+      ...(input?.apiClient ?? {})
+    };
   }
 
   async listChanges(
@@ -795,17 +917,81 @@ export class GmailProvider implements MailProvider {
   }
 
   async ensureLabel(
-    _context: MailProviderContext,
-    _req: EnsureLabelRequest
+    context: MailProviderContext,
+    req: EnsureLabelRequest
   ): Promise<EnsureLabelResponse> {
-    return notImplemented("ensureLabel");
+    const auth = toAuth(context);
+    const userId = auth.userId ?? DEFAULT_USER_ID;
+    const labelsResponse = await this.apiClient.listLabels({
+      accessToken: auth.accessToken,
+      userId
+    });
+    const existing = (labelsResponse.labels ?? []).find(
+      (label) => normalizeLabelName(label.name ?? "") === normalizeLabelName(req.name)
+    );
+    if (existing?.id) {
+      return {
+        labelId: existing.id as LabelId
+      };
+    }
+    const created = await this.apiClient.createLabel({
+      accessToken: auth.accessToken,
+      userId,
+      name: req.name
+    });
+    if (!created.id) {
+      throw new Error(`Gmail users.labels.create did not return id for label "${req.name}"`);
+    }
+    return {
+      labelId: created.id as LabelId
+    };
   }
 
   async modifyThreadLabels(
-    _context: MailProviderContext,
-    _req: ModifyThreadLabelsRequest
+    context: MailProviderContext,
+    req: ModifyThreadLabelsRequest
   ): Promise<void> {
-    return notImplemented("modifyThreadLabels");
+    const auth = toAuth(context);
+    const userId = auth.userId ?? DEFAULT_USER_ID;
+    await this.apiClient.modifyThreadLabels({
+      accessToken: auth.accessToken,
+      userId,
+      threadId: String(req.threadId),
+      addLabelIds: (req.add ?? []).map((labelId) => String(labelId)),
+      removeLabelIds: (req.remove ?? []).map((labelId) => String(labelId))
+    });
+  }
+
+  async ensureLabels(
+    context: MailProviderContext,
+    req: EnsureLabelsRequest
+  ): Promise<EnsureLabelsResponse> {
+    const labelsByKey = {} as Record<LabelKey, LabelId>;
+    for (const label of req.labels) {
+      const ensured = await this.ensureLabel(context, {
+        name: label.name
+      });
+      labelsByKey[label.key] = ensured.labelId;
+    }
+    return {
+      labelIdsByKey: labelsByKey
+    };
+  }
+
+  async setThreadStateLabels(
+    context: MailProviderContext,
+    req: SetThreadStateLabelsRequest
+  ): Promise<void> {
+    const desiredKey = stateToLabelKey(req.state);
+    const desiredLabelId = req.labelIdsByKey[desiredKey];
+    const allStateIds = (Object.values(req.labelIdsByKey) as LabelId[]).map((labelId) => String(labelId));
+    const removeLabelIds = allStateIds.filter((labelId) => labelId !== String(desiredLabelId));
+
+    await this.modifyThreadLabels(context, {
+      threadId: req.threadId,
+      add: [desiredLabelId],
+      remove: removeLabelIds as LabelId[]
+    });
   }
 
   async upsertThreadDraft(

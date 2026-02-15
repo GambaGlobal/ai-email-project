@@ -459,3 +459,80 @@ test("GmailProvider.upsertThreadDraft throws MissingRecipientError when no recip
     }
   );
 });
+
+test("GmailProvider.ensureLabels creates missing labels and reuses existing by case-insensitive name", async () => {
+  const created: string[] = [];
+  const provider = new GmailProvider({
+    apiClient: {
+      async listLabels() {
+        return {
+          labels: [{ id: "lbl-drafted", name: "ai drafted" }]
+        };
+      },
+      async createLabel(input) {
+        created.push(input.name);
+        return {
+          id: input.name === "AI Needs Review" ? "lbl-needs" : "lbl-blocked",
+          name: input.name
+        };
+      }
+    }
+  });
+
+  const result = await provider.ensureLabels(context, {
+    labels: [
+      { key: "ai_drafted", name: "AI Drafted" },
+      { key: "ai_needs_review", name: "AI Needs Review" },
+      { key: "ai_blocked", name: "AI Blocked" }
+    ]
+  });
+
+  assert.equal(String(result.labelIdsByKey.ai_drafted), "lbl-drafted");
+  assert.equal(String(result.labelIdsByKey.ai_needs_review), "lbl-needs");
+  assert.equal(String(result.labelIdsByKey.ai_blocked), "lbl-blocked");
+  assert.deepEqual(created, ["AI Needs Review", "AI Blocked"]);
+});
+
+test("GmailProvider.setThreadStateLabels adds desired state label and removes others", async () => {
+  const modifyCalls: Array<{ addLabelIds?: string[]; removeLabelIds?: string[] }> = [];
+  const provider = new GmailProvider({
+    apiClient: {
+      async modifyThreadLabels(input) {
+        modifyCalls.push({
+          addLabelIds: input.addLabelIds,
+          removeLabelIds: input.removeLabelIds
+        });
+      }
+    }
+  });
+
+  await provider.setThreadStateLabels(context, {
+    threadId: "thread-state" as ThreadId,
+    state: "drafted",
+    labelIdsByKey: {
+      ai_drafted: "lbl-drafted" as never,
+      ai_needs_review: "lbl-needs" as never,
+      ai_blocked: "lbl-blocked" as never
+    }
+  });
+  await provider.setThreadStateLabels(context, {
+    threadId: "thread-state" as ThreadId,
+    state: "drafted",
+    labelIdsByKey: {
+      ai_drafted: "lbl-drafted" as never,
+      ai_needs_review: "lbl-needs" as never,
+      ai_blocked: "lbl-blocked" as never
+    }
+  });
+
+  assert.deepEqual(modifyCalls, [
+    {
+      addLabelIds: ["lbl-drafted"],
+      removeLabelIds: ["lbl-needs", "lbl-blocked"]
+    },
+    {
+      addLabelIds: ["lbl-drafted"],
+      removeLabelIds: ["lbl-needs", "lbl-blocked"]
+    }
+  ]);
+});

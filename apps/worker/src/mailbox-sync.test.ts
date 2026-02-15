@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { MailChange, MessageId, ThreadId } from "@ai-email/shared";
 import {
+  applyThreadStateLabelsForThreads,
+  decideThreadStateFromOutcome,
   MemoryCursorStore,
   runDraftUpsertIdempotencyHarness,
   syncMailbox,
   type DraftUpsertProvider,
   type MailboxSyncProvider
 } from "./mailbox-sync";
+import { MissingRecipientError } from "../../../packages/mail-gmail/src/errors.js";
 
 function createMessageAddedChange(id: string, threadId: string): MailChange {
   return {
@@ -111,4 +114,57 @@ test("runDraftUpsertIdempotencyHarness calls provider twice with same idempotenc
   assert.deepEqual(calls, ["tenant-1:mailbox-1:msg-1", "tenant-1:mailbox-1:msg-1"]);
   assert.equal(result.first.action, "created");
   assert.equal(result.second.action, "updated");
+});
+
+test("decideThreadStateFromOutcome maps success and MissingRecipientError deterministically", () => {
+  const drafted = decideThreadStateFromOutcome({
+    upsertResult: { action: "created" }
+  });
+  assert.deepEqual(drafted, {
+    state: "drafted",
+    reasonCode: "OK_DRAFTED"
+  });
+
+  const needsReview = decideThreadStateFromOutcome({
+    error: new MissingRecipientError({ threadId: "thread-1" })
+  });
+  assert.deepEqual(needsReview, {
+    state: "needs_review",
+    reasonCode: "MISSING_RECIPIENT"
+  });
+});
+
+test("applyThreadStateLabelsForThreads ensures labels once and applies to deduped thread ids", async () => {
+  const ensureCalls: number[] = [];
+  const stateCalls: Array<{ threadId: string; state: string }> = [];
+
+  const result = await applyThreadStateLabelsForThreads({
+    provider: {
+      async ensureLabels() {
+        ensureCalls.push(1);
+        return {
+          labelIdsByKey: {
+            ai_drafted: "lbl-drafted" as never,
+            ai_needs_review: "lbl-needs" as never,
+            ai_blocked: "lbl-blocked" as never
+          }
+        };
+      },
+      async setThreadStateLabels(input) {
+        stateCalls.push({
+          threadId: String(input.threadId),
+          state: input.state
+        });
+      }
+    },
+    threadIds: ["thread-b" as never, "thread-a" as never, "thread-b" as never],
+    state: "drafted"
+  });
+
+  assert.equal(ensureCalls.length, 1);
+  assert.deepEqual(stateCalls, [
+    { threadId: "thread-a", state: "drafted" },
+    { threadId: "thread-b", state: "drafted" }
+  ]);
+  assert.deepEqual(result.appliedThreadIds.map((id) => String(id)), ["thread-a", "thread-b"]);
 });

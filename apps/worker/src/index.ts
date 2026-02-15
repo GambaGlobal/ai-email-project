@@ -9,9 +9,13 @@ import {
   type Cursor,
   DEFAULT_JOB_ATTEMPTS,
   ErrorClass,
+  type LabelId,
+  type LabelKey,
   type MailboxId,
   type MailChange,
+  type ThreadId,
   type NormalizedThread,
+  type UpsertThreadDraftResponse,
   KILL_SWITCH_DOCS_INGESTION,
   KILL_SWITCH_MAILBOX_SYNC,
   KILL_SWITCH_MAIL_NOTIFICATIONS,
@@ -23,7 +27,9 @@ import {
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 import {
+  applyThreadStateLabelsForThreads,
   collectThreadContextsForChanges,
+  decideThreadStateFromOutcome,
   syncMailbox,
   type MailboxCursorStore,
   type MailboxSyncProvider
@@ -391,6 +397,54 @@ class GmailMailboxSyncProvider implements MailboxSyncProvider {
       }
     );
     return response.thread;
+  }
+
+  async ensureLabelsForTenant(input: {
+    tenantId: string;
+    mailboxId: string;
+    labels: { key: LabelKey; name: string }[];
+  }): Promise<{ labelIdsByKey: Record<LabelKey, LabelId> }> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    return this.provider.ensureLabels(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId
+        }
+      },
+      {
+        labels: input.labels
+      }
+    );
+  }
+
+  async setThreadStateLabelsForTenant(input: {
+    tenantId: string;
+    mailboxId: string;
+    threadId: ThreadId;
+    state: "drafted" | "needs_review" | "blocked";
+    labelIdsByKey: Record<LabelKey, LabelId>;
+  }): Promise<void> {
+    const accessToken = await loadGmailAccessToken(input.tenantId);
+    const userId = await loadMailboxAddress(input.tenantId, input.mailboxId);
+    await this.provider.setThreadStateLabels(
+      {
+        mailboxId: input.mailboxId as MailboxId,
+        provider: "gmail",
+        auth: {
+          accessToken,
+          userId
+        }
+      },
+      {
+        threadId: input.threadId,
+        state: input.state,
+        labelIdsByKey: input.labelIdsByKey
+      }
+    );
   }
 }
 
@@ -1300,6 +1354,51 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
               threadCount: threadContexts.length
             })
           );
+        }
+
+        if (process.env.MAILBOX_SYNC_APPLY_LABELS === "1") {
+          const threadIds = Array.from(
+            new Set(syncResult.changes.map((change) => String(change.threadId)))
+          ).map((threadId) => threadId as ThreadId);
+
+          if (threadIds.length > 0) {
+            const decision = decideThreadStateFromOutcome({
+              upsertResult: { action: "created" } as UpsertThreadDraftResponse
+            });
+            const labelApplyResult = await applyThreadStateLabelsForThreads({
+              provider: {
+                ensureLabels: ({ labels }) =>
+                  gmailMailboxSyncProvider.ensureLabelsForTenant({
+                    tenantId,
+                    mailboxId,
+                    labels
+                  }),
+                setThreadStateLabels: ({ threadId, state, labelIdsByKey }) =>
+                  gmailMailboxSyncProvider.setThreadStateLabelsForTenant({
+                    tenantId,
+                    mailboxId,
+                    threadId,
+                    state,
+                    labelIdsByKey
+                  })
+              },
+              threadIds,
+              state: decision.state
+            });
+
+            // eslint-disable-next-line no-console
+            console.log(
+              JSON.stringify({
+                event: "mailbox.sync.state_labels.applied",
+                tenantId,
+                mailboxId,
+                correlationId: mailboxRunCorrelationId,
+                state: decision.state,
+                reasonCode: decision.reasonCode,
+                threadCount: labelApplyResult.appliedThreadIds.length
+              })
+            );
+          }
         }
 
         const stateAfterSync = await withTenantClient(tenantId, async (client) => {

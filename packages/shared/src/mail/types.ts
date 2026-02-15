@@ -12,6 +12,18 @@ export type DraftWriteFingerprint = string & {
   readonly __brand: "DraftWriteFingerprint";
 };
 
+export type ThreadState = "drafted" | "needs_review" | "blocked";
+
+export type ThreadStateReasonCode =
+  | "OK_DRAFTED"
+  | "SENSITIVE_REFUND"
+  | "SENSITIVE_SAFETY"
+  | "SENSITIVE_MEDICAL"
+  | "SENSITIVE_LEGAL"
+  | "EXCEPTION_REQUEST"
+  | "MISSING_RECIPIENT"
+  | "PROVIDER_ERROR";
+
 export type MailAddress = {
   name?: string;
   email: string;

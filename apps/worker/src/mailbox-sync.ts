@@ -1,14 +1,22 @@
 import type {
   Cursor,
+  LabelId,
+  LabelKey,
   MailBody,
   MailChange,
   MailboxId,
   MessageId,
   NormalizedThread,
+  ThreadState,
+  ThreadStateDecision,
+  ThreadStateReasonCode,
   ThreadId,
   UpsertThreadDraftResponse
 } from "@ai-email/shared";
-import { GmailHistoryExpiredError } from "../../../packages/mail-gmail/src/errors.js";
+import {
+  GmailHistoryExpiredError,
+  MissingRecipientError
+} from "../../../packages/mail-gmail/src/errors.js";
 
 export interface MailboxCursorStore {
   get(tenantId: string, mailboxId: string): Promise<string | null>;
@@ -43,6 +51,23 @@ export type DraftUpsertProvider = {
     idempotencyKey: string;
   }): Promise<UpsertThreadDraftResponse>;
 };
+
+export type ThreadStateLabelProvider = {
+  ensureLabels(input: {
+    labels: { key: LabelKey; name: string }[];
+  }): Promise<{ labelIdsByKey: Record<LabelKey, LabelId> }>;
+  setThreadStateLabels(input: {
+    threadId: ThreadId;
+    state: ThreadState;
+    labelIdsByKey: Record<LabelKey, LabelId>;
+  }): Promise<void>;
+};
+
+export const AI_STATE_LABEL_SPECS: { key: LabelKey; name: string }[] = [
+  { key: "ai_drafted", name: "AI Drafted" },
+  { key: "ai_needs_review", name: "AI Needs Review" },
+  { key: "ai_blocked", name: "AI Blocked" }
+];
 
 export class MemoryCursorStore implements MailboxCursorStore {
   private readonly entries = new Map<string, string>();
@@ -209,4 +234,59 @@ export async function runDraftUpsertIdempotencyHarness(input: {
   const first = await input.provider.upsertThreadDraft(request);
   const second = await input.provider.upsertThreadDraft(request);
   return { first, second };
+}
+
+export function decideThreadStateFromOutcome(input: {
+  upsertResult?: UpsertThreadDraftResponse;
+  error?: unknown;
+}): ThreadStateDecision {
+  if (input.error instanceof MissingRecipientError) {
+    return {
+      state: "needs_review",
+      reasonCode: "MISSING_RECIPIENT"
+    };
+  }
+  if (input.error) {
+    return {
+      state: "blocked",
+      reasonCode: "PROVIDER_ERROR"
+    };
+  }
+  if (input.upsertResult && (input.upsertResult.action === "created" || input.upsertResult.action === "updated")) {
+    return {
+      state: "drafted",
+      reasonCode: "OK_DRAFTED"
+    };
+  }
+  return {
+    state: "blocked",
+    reasonCode: "PROVIDER_ERROR"
+  };
+}
+
+export async function applyThreadStateLabelsForThreads(input: {
+  provider: ThreadStateLabelProvider;
+  threadIds: ThreadId[];
+  state: ThreadState;
+}): Promise<{ appliedThreadIds: ThreadId[]; labelIdsByKey: Record<LabelKey, LabelId> }> {
+  const uniqueThreadIds = Array.from(new Set(input.threadIds.map((threadId) => String(threadId))))
+    .sort((left, right) => left.localeCompare(right))
+    .map((threadId) => threadId as ThreadId);
+
+  const ensured = await input.provider.ensureLabels({
+    labels: AI_STATE_LABEL_SPECS
+  });
+
+  for (const threadId of uniqueThreadIds) {
+    await input.provider.setThreadStateLabels({
+      threadId,
+      state: input.state,
+      labelIdsByKey: ensured.labelIdsByKey
+    });
+  }
+
+  return {
+    appliedThreadIds: uniqueThreadIds,
+    labelIdsByKey: ensured.labelIdsByKey
+  };
 }
