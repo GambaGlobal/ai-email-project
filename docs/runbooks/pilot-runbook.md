@@ -28,6 +28,8 @@ This runbook defines pilot operations readiness, incident triage, mitigation, re
 Policy and roadmap references (use these first during incidents/planning):
 - Reliability policy DR: `docs/decisions/0011-phase-10-reliability-observability-v1-freeze.md`
 - Phase 10 freeze + evidence gate + backlog: `docs/phases/phase-10-reliability-observability/phase-10-freeze-v1.md`
+- Phase 10 closeout v1 (outcomes + Phase 11 entry criteria): `docs/phases/phase-10-reliability-observability/phase-10-closeout-v1.md`
+- CI required-check proof source of truth: `docs/runbooks/branch-protection.md`
 
 Fast operator path (under 30 seconds):
 1. `pnpm -w ops:monitor`
