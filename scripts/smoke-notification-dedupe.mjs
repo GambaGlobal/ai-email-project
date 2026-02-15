@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL ?? "postgresql://127.0.0.1:5432/ai_email_dev";
 const apiBaseUrl = process.env.SMOKE_API_BASE_URL ?? "http://127.0.0.1:3001";
 const tenantId = process.env.SMOKE_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 10000);
@@ -74,12 +74,6 @@ function fail(input) {
   console.error(
     `smoke: verify ledger: /opt/homebrew/opt/postgresql@16/bin/psql \"${databaseUrl ?? '<DATABASE_URL>'}\" -c \"SELECT count(*) FROM mail_notification_receipts WHERE tenant_id='${tenantId}'::uuid AND provider='gmail' AND message_id='${input.messageId}';\"`
   );
-  process.exit(1);
-}
-
-if (!databaseUrl) {
-  console.error("FAIL: smoke:notify-dedupe FAIL reason=missing_DATABASE_URL");
-  console.error('smoke: set DATABASE_URL, e.g. DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev"');
   process.exit(1);
 }
 

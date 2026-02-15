@@ -6,10 +6,16 @@ import {
   mailNotificationJobId,
   MAIL_NOTIFICATIONS_QUEUE
 } from "../lib/mail-notifications-queue.js";
+import {
+  enqueueMailboxSync,
+  mailboxSyncJobId,
+  MAILBOX_SYNC_QUEUE
+} from "../lib/mailbox-sync-queue.js";
 import { toPubsubIdentifiers, toStructuredLogContext, toStructuredLogEvent } from "../logging.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NUMERIC_PATTERN = /^[0-9]+$/;
 
 type PubsubPushBody = {
   message?: {
@@ -32,6 +38,13 @@ type ReceiptRow = {
   enqueued_job_id: string | null;
 };
 
+type MailboxSyncStateRow = {
+  last_history_id: string;
+  pending_max_history_id: string;
+  enqueued_at: string | null;
+  enqueued_job_id: string | null;
+};
+
 function resolveCorrelationId(headers: Record<string, unknown>) {
   const raw = headers["x-correlation-id"];
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -43,6 +56,13 @@ function resolveCorrelationId(headers: Record<string, unknown>) {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeHistoryId(value: string | null): string | null {
+  if (!value || !NUMERIC_PATTERN.test(value)) {
+    return null;
+  }
+  return value;
 }
 
 function parsePubsubBody(body: unknown): {
@@ -70,7 +90,7 @@ function parsePubsubBody(body: unknown): {
     }
   }
 
-  const gmailHistoryId = asString(decodedPayload.historyId);
+  const gmailHistoryId = normalizeHistoryId(asString(decodedPayload.historyId));
   const emailAddress = asString(decodedPayload.emailAddress)?.toLowerCase() ?? null;
 
   const payload: Record<string, unknown> = {
@@ -101,6 +121,10 @@ function parseUuidHeader(headers: Record<string, unknown>, key: string): string 
   return value;
 }
 
+function toUuidOrNull(value: string): string | null {
+  return UUID_PATTERN.test(value) ? value : null;
+}
+
 async function resolveMailboxByEmail(emailAddress: string): Promise<{ tenantId: string; mailboxId: string } | null> {
   const rows = await queryRowsGlobal(
     `
@@ -123,6 +147,135 @@ async function resolveMailboxByEmail(emailAddress: string): Promise<{ tenantId: 
     tenantId: row.tenant_id,
     mailboxId: row.mailbox_id
   };
+}
+
+async function coalesceMailboxSync(input: {
+  tenantId: string;
+  mailboxId: string;
+  provider: "gmail";
+  historyId: string;
+  correlationId: string;
+}): Promise<
+  | {
+      kind: "enqueued";
+      jobId: string;
+      pendingMaxHistoryId: string;
+      lastHistoryId: string;
+    }
+  | {
+      kind: "deduped";
+      reason: "already_enqueued";
+      jobId: string;
+      pendingMaxHistoryId: string;
+      lastHistoryId: string;
+    }
+  | {
+      kind: "failed";
+      errorMessage: string;
+    }
+> {
+  return withTenantClient(input.tenantId, async (client) => {
+    const upserted = (await queryOne(
+      client,
+      `
+        INSERT INTO mailbox_sync_state (
+          tenant_id,
+          mailbox_id,
+          provider,
+          last_history_id,
+          pending_max_history_id,
+          last_correlation_id,
+          pending_updated_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, 0, $4::numeric, $5::uuid, now(), now())
+        ON CONFLICT (tenant_id, mailbox_id, provider)
+        DO UPDATE
+        SET
+          pending_max_history_id = GREATEST(mailbox_sync_state.pending_max_history_id, EXCLUDED.pending_max_history_id),
+          last_correlation_id = EXCLUDED.last_correlation_id,
+          pending_updated_at = now(),
+          updated_at = now()
+        RETURNING
+          last_history_id::text,
+          pending_max_history_id::text,
+          enqueued_at::text,
+          enqueued_job_id
+      `,
+      [input.tenantId, input.mailboxId, input.provider, input.historyId, toUuidOrNull(input.correlationId)]
+    )) as MailboxSyncStateRow | null;
+
+    if (!upserted) {
+      return {
+        kind: "failed",
+        errorMessage: "mailbox-sync-state-upsert-failed"
+      } as const;
+    }
+
+    const jobId = mailboxSyncJobId(input.provider, input.mailboxId);
+
+    try {
+      const enqueueResult = await enqueueMailboxSync(
+        {
+          tenantId: input.tenantId,
+          mailboxId: input.mailboxId,
+          provider: input.provider
+        },
+        jobId
+      );
+
+      await client.query(
+        `
+          UPDATE mailbox_sync_state
+          SET
+            enqueued_at = now(),
+            enqueued_job_id = $4,
+            last_error = NULL,
+            updated_at = now()
+          WHERE tenant_id = $1
+            AND mailbox_id = $2
+            AND provider = $3
+        `,
+        [input.tenantId, input.mailboxId, input.provider, enqueueResult.jobId ?? jobId]
+      );
+
+      if (enqueueResult.reused) {
+        return {
+          kind: "deduped",
+          reason: "already_enqueued",
+          jobId: enqueueResult.jobId ?? jobId,
+          pendingMaxHistoryId: upserted.pending_max_history_id,
+          lastHistoryId: upserted.last_history_id
+        } as const;
+      }
+
+      return {
+        kind: "enqueued",
+        jobId: enqueueResult.jobId ?? jobId,
+        pendingMaxHistoryId: upserted.pending_max_history_id,
+        lastHistoryId: upserted.last_history_id
+      } as const;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await client.query(
+        `
+          UPDATE mailbox_sync_state
+          SET
+            last_error = LEFT($4, 500),
+            updated_at = now()
+          WHERE tenant_id = $1
+            AND mailbox_id = $2
+            AND provider = $3
+        `,
+        [input.tenantId, input.mailboxId, input.provider, errorMessage]
+      );
+
+      return {
+        kind: "failed",
+        errorMessage
+      } as const;
+    }
+  });
 }
 
 const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
@@ -376,8 +529,6 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
             jobId: outcome.jobId
           })
         );
-
-        return reply.code(204).send();
       }
 
       if (outcome.kind === "enqueue_failed") {
@@ -395,27 +546,104 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ error: "Failed to enqueue notification" });
       }
 
-      request.log.info(
-        toStructuredLogEvent(baseLogContext, "mail.notification.enqueued", {
-          ...toPubsubIdentifiers(headers)
-        }),
-        "Gmail notification enqueued"
-      );
+      if (outcome.kind === "enqueued") {
+        request.log.info(
+          toStructuredLogEvent(baseLogContext, "mail.notification.enqueued", {
+            ...toPubsubIdentifiers(headers)
+          }),
+          "Gmail notification enqueued"
+        );
+
+        console.log(
+          JSON.stringify({
+            event: "mail.notification.enqueued",
+            correlationId,
+            tenantId,
+            mailboxId,
+            provider,
+            messageId,
+            gmailHistoryId: parsed.gmailHistoryId,
+            receiptId: outcome.receiptId,
+            jobId: outcome.jobId,
+            queueName
+          })
+        );
+      }
+
+      if (!mailboxId || !parsed.gmailHistoryId) {
+        console.log(
+          JSON.stringify({
+            event: "mailbox.sync.deduped",
+            tenantId,
+            mailboxId,
+            provider,
+            correlationId,
+            reason: !mailboxId ? "mailbox_unresolved" : "history_id_missing"
+          })
+        );
+        return reply.code(204).send();
+      }
+
+      const mailboxSyncOutcome = await coalesceMailboxSync({
+        tenantId,
+        mailboxId,
+        provider: "gmail",
+        historyId: parsed.gmailHistoryId,
+        correlationId
+      });
+
+      if (mailboxSyncOutcome.kind === "failed") {
+        request.log.error(
+          {
+            correlationId,
+            tenantId,
+            mailboxId,
+            provider,
+            messageId,
+            errorMessage: mailboxSyncOutcome.errorMessage
+          },
+          "Failed to coalesce mailbox sync state"
+        );
+        return reply.code(500).send({ error: "Failed to enqueue mailbox sync" });
+      }
 
       console.log(
         JSON.stringify({
-          event: "mail.notification.enqueued",
-          correlationId,
+          event: "mailbox.sync.state_updated",
           tenantId,
           mailboxId,
           provider,
-          messageId,
-          gmailHistoryId: parsed.gmailHistoryId,
-          receiptId: outcome.receiptId,
-          jobId: outcome.jobId,
-          queueName
+          correlationId,
+          pendingMaxHistoryId: mailboxSyncOutcome.pendingMaxHistoryId,
+          lastHistoryId: mailboxSyncOutcome.lastHistoryId
         })
       );
+
+      if (mailboxSyncOutcome.kind === "deduped") {
+        console.log(
+          JSON.stringify({
+            event: "mailbox.sync.deduped",
+            tenantId,
+            mailboxId,
+            provider,
+            correlationId,
+            reason: mailboxSyncOutcome.reason,
+            jobId: mailboxSyncOutcome.jobId
+          })
+        );
+      } else {
+        console.log(
+          JSON.stringify({
+            event: "mailbox.sync.enqueued",
+            tenantId,
+            mailboxId,
+            provider,
+            correlationId,
+            jobId: mailboxSyncOutcome.jobId,
+            queueName: MAILBOX_SYNC_QUEUE
+          })
+        );
+      }
 
       return reply.code(204).send();
     } catch (error) {

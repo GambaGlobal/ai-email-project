@@ -30,6 +30,7 @@ type DocsIngestionJob = {
 const workerName = process.env.WORKER_NAME ?? "worker";
 const docsQueueName = "docs_ingestion";
 const mailNotificationsQueueName = "mail_notifications";
+const mailboxSyncQueueName = "mailbox_sync";
 
 type MailNotificationJob = {
   tenantId: string;
@@ -41,6 +42,12 @@ type MailNotificationJob = {
   receiptId?: string;
   gmailHistoryId?: string | null;
   emailAddress?: string | null;
+};
+
+type MailboxSyncJob = {
+  tenantId?: string;
+  mailboxId?: string;
+  provider?: "gmail";
 };
 
 if (!process.env.REDIS_URL) {
@@ -564,6 +571,245 @@ const mailNotificationsWorker = new Worker<MailNotificationJob>(
   }
 );
 
+const mailboxSyncWorker = new Worker<MailboxSyncJob>(
+  mailboxSyncQueueName,
+  async (job) => {
+    const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
+
+    const safeTenantId =
+      typeof job.data.tenantId === "string" && job.data.tenantId.length > 0 ? job.data.tenantId : undefined;
+    const safeMailboxId =
+      typeof job.data.mailboxId === "string" && job.data.mailboxId.length > 0 ? job.data.mailboxId : undefined;
+    const provider = job.data.provider ?? "gmail";
+
+    const baseLogContext = toStructuredLogContext({
+      tenantId: safeTenantId,
+      mailboxId: safeMailboxId,
+      provider,
+      stage: "mailbox_sync",
+      queueName: job.queueName,
+      jobId: job.id?.toString()
+    });
+    const attempt = job.attemptsMade + 1;
+    const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
+
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify(
+        toStructuredLogEvent(baseLogContext, "job.start", {
+          startedAt: startedAtIso,
+          attempt,
+          maxAttempts
+        })
+      )
+    );
+
+    try {
+      const tenantId = assertRequiredString(job.data.tenantId, "tenantId");
+      const mailboxId = assertRequiredString(job.data.mailboxId, "mailboxId");
+
+      const maxDrainPasses = 5;
+      let drainPasses = 0;
+      let result:
+        | {
+            mode: "ignored";
+            reason: "no_pending";
+            lastHistoryId: string;
+            pendingMaxHistoryId: string;
+          }
+        | {
+            mode: "done";
+            lastHistoryId: string;
+            pendingMaxHistoryId: string;
+          } = {
+        mode: "ignored",
+        reason: "no_pending",
+        lastHistoryId: "0",
+        pendingMaxHistoryId: "0"
+      };
+
+      while (drainPasses < maxDrainPasses) {
+        const passResult = await withTenantClient(tenantId, async (client) => {
+          const stateResult = await client.query(
+            `
+              SELECT
+                last_history_id::text AS last_history_id,
+                pending_max_history_id::text AS pending_max_history_id
+              FROM mailbox_sync_state
+              WHERE tenant_id = $1
+                AND mailbox_id = $2
+                AND provider = $3
+              FOR UPDATE
+            `,
+            [tenantId, mailboxId, provider]
+          );
+          const row = stateResult.rows[0] as
+            | { last_history_id?: string; pending_max_history_id?: string }
+            | undefined;
+
+          if (!row) {
+            throw new Error("mailbox_sync_state missing for mailbox/provider");
+          }
+
+          const lastHistoryId = String(row.last_history_id ?? "0");
+          const pendingMaxHistoryId = String(row.pending_max_history_id ?? "0");
+          const hasPending = BigInt(pendingMaxHistoryId) > BigInt(lastHistoryId);
+
+          if (!hasPending) {
+            await client.query(
+              `
+                UPDATE mailbox_sync_state
+                SET
+                  enqueued_at = NULL,
+                  enqueued_job_id = NULL,
+                  updated_at = now()
+                WHERE tenant_id = $1
+                  AND mailbox_id = $2
+                  AND provider = $3
+              `,
+              [tenantId, mailboxId, provider]
+            );
+
+            return {
+              mode: "idle",
+              lastHistoryId,
+              pendingMaxHistoryId
+            } as const;
+          }
+
+          await client.query(
+            `
+              UPDATE mailbox_sync_state
+              SET
+                last_history_id = pending_max_history_id,
+                last_processed_at = now(),
+                enqueued_at = NULL,
+                enqueued_job_id = NULL,
+                last_error = NULL,
+                updated_at = now()
+              WHERE tenant_id = $1
+                AND mailbox_id = $2
+                AND provider = $3
+            `,
+            [tenantId, mailboxId, provider]
+          );
+
+          return {
+            mode: "advanced",
+            lastHistoryId: pendingMaxHistoryId,
+            pendingMaxHistoryId
+          } as const;
+        });
+
+        drainPasses += 1;
+
+        if (passResult.mode === "idle") {
+          if (drainPasses === 1) {
+            result = {
+              mode: "ignored",
+              reason: "no_pending",
+              lastHistoryId: passResult.lastHistoryId,
+              pendingMaxHistoryId: passResult.pendingMaxHistoryId
+            };
+          }
+          break;
+        }
+
+        result = {
+          mode: "done",
+          lastHistoryId: passResult.lastHistoryId,
+          pendingMaxHistoryId: passResult.pendingMaxHistoryId
+        };
+      }
+
+      if (result.mode === "ignored") {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify({
+            event: "job.ignored",
+            reason: result.reason,
+            tenantId,
+            mailboxId,
+            queueName: job.queueName,
+            jobId: job.id?.toString(),
+            stage: "mailbox_sync",
+            attempt,
+            maxAttempts
+          })
+        );
+      }
+
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          ...toStructuredLogContext(baseLogContext),
+          event: "job.done",
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt,
+          attempt,
+          maxAttempts,
+          lastHistoryId: result.lastHistoryId,
+          pendingMaxHistoryId: result.pendingMaxHistoryId,
+          drainPasses
+        })
+      );
+    } catch (error) {
+      const classifiedError = classifyError(error);
+      const errorClass =
+        classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
+      const structuredError = toLogError(error);
+      const truncatedStack = truncateText(toSafeStack(structuredError.stack), 4000);
+
+      if (safeTenantId && safeMailboxId) {
+        try {
+          await withTenantClient(safeTenantId, async (client) => {
+            await client.query(
+              `
+                UPDATE mailbox_sync_state
+                SET
+                  last_error = LEFT($4, 500),
+                  updated_at = now()
+                WHERE tenant_id = $1
+                  AND mailbox_id = $2
+                  AND provider = $3
+              `,
+              [safeTenantId, safeMailboxId, provider, structuredError.message]
+            );
+          });
+        } catch {
+          // ignore best-effort persistence failure
+        }
+      }
+
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.error", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts,
+            errorClass,
+            errorCode: structuredError.code ?? classifiedError.code,
+            errorMessage: structuredError.message,
+            errorStack: truncatedStack
+          })
+        )
+      );
+
+      if (errorClass === ErrorClass.PERMANENT) {
+        throw new UnrecoverableError(structuredError.message);
+      }
+
+      throw error;
+    }
+  },
+  {
+    connection: redisConnection
+  }
+);
+
 let readyLogPrinted = false;
 const emitWorkerReady = () => {
   if (readyLogPrinted) {
@@ -576,3 +822,4 @@ const emitWorkerReady = () => {
 
 ingestionWorker.on("ready", emitWorkerReady);
 mailNotificationsWorker.on("ready", emitWorkerReady);
+mailboxSyncWorker.on("ready", emitWorkerReady);

@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-const databaseUrl = process.env.DATABASE_URL;
-const redisUrl = process.env.REDIS_URL;
+const databaseUrl = process.env.DATABASE_URL ?? "postgresql://127.0.0.1:5432/ai_email_dev";
+const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const apiBaseUrl = process.env.SMOKE_API_BASE_URL ?? "http://127.0.0.1:3001";
 const tenantId = process.env.SMOKE_TENANT_ID ?? "00000000-0000-0000-0000-000000000001";
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 10000);
@@ -129,21 +129,6 @@ function fail(input) {
     `smoke: grep worker logs: rg -a "${input.correlationId}" "${workerLogPath}" | rg -e "job.start|job.done|job.error"`
   );
   process.exit(1);
-}
-
-if (!databaseUrl) {
-  fail({
-    correlationId: "unknown",
-    reason: "missing_DATABASE_URL",
-    extra: 'set DATABASE_URL, e.g. DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev"'
-  });
-}
-if (!redisUrl) {
-  fail({
-    correlationId: "unknown",
-    reason: "missing_REDIS_URL",
-    extra: 'set REDIS_URL, e.g. REDIS_URL="redis://127.0.0.1:6379"'
-  });
 }
 
 const correlationId = randomUUID();

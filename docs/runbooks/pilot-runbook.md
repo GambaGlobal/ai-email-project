@@ -165,6 +165,18 @@ Log debugging commands:
 - `rg -a "<CID>" /tmp/ai-email-api.log | rg -e "mail.notification.received|mail.notification.enqueued|mail.notification.deduped"`
 - `rg -a "<CID>" /tmp/ai-email-worker.log | rg -e "job.start|job.done|job.error"`
 
+## Gmail notification coalescing (mailbox cursor)
+Invariants:
+- Only one `mailbox_sync` job is inflight per `(mailboxId, provider)`.
+- `pending_max_history_id` tracks the max HistoryId seen across burst notifications.
+- Worker advances `last_history_id` to `pending_max_history_id` and clears enqueue markers.
+
+Run deterministic coalescing smoke:
+1. `pnpm -w smoke:notify-coalesce`
+
+Inspect mailbox cursor state:
+- `psql "$DATABASE_URL" -c "SELECT tenant_id, mailbox_id, provider, last_history_id, pending_max_history_id, enqueued_job_id, enqueued_at, last_error, updated_at FROM mailbox_sync_state WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid ORDER BY updated_at DESC LIMIT 5;"`
+
 ## One-command local dev
 Use this for a single-command bring-up/tear-down loop:
 1. `pnpm -w dev:up`
