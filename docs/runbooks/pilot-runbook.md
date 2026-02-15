@@ -230,6 +230,20 @@ Run deterministic coalescing smoke:
 Inspect mailbox cursor state:
 - `psql "$DATABASE_URL" -c "SELECT tenant_id, mailbox_id, provider, last_history_id, pending_max_history_id, enqueued_job_id, enqueued_at, last_error, updated_at FROM mailbox_sync_state WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid ORDER BY updated_at DESC LIMIT 5;"`
 
+## Mailbox sync runs (audit)
+`mailbox_sync_runs` is the durable run ledger for mailbox sync execution boundaries.
+
+Run deterministic proof:
+1. `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" pnpm -w smoke:mailbox-sync-run`
+
+Inspect run rows:
+- `psql "$DATABASE_URL" -c "SELECT tenant_id, mailbox_id, provider, correlation_id, from_history_id, to_history_id, fetched_count, status, last_error_class, started_at, finished_at FROM mailbox_sync_runs WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid ORDER BY started_at DESC LIMIT 20;"`
+
+Look for:
+- matching `correlation_id` and `mailbox_id`
+- `status='done'`
+- `fetched_count` (v1 stub defaults to `0`)
+
 ## Gmail HistoryId safety
 Rules:
 - Treat Gmail `historyId` as a digits-only string end-to-end; never cast to JS `Number`.

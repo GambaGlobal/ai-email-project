@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { UnrecoverableError, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
@@ -50,11 +51,20 @@ type MailboxSyncJob = {
   provider?: "gmail";
 };
 
+type MailboxSyncStateSnapshotRow = {
+  last_history_id: string;
+  pending_max_history_id: string;
+  last_correlation_id: string | null;
+};
+
 type MailNotificationReceiptRow = {
   id: string;
   processing_status: string;
   processed_at: string | null;
 };
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 if (!process.env.REDIS_URL) {
   // eslint-disable-next-line no-console
@@ -90,6 +100,27 @@ function assertRequiredString(value: unknown, fieldName: string): string {
     return value;
   }
   throw new Error(`Missing required field: ${fieldName}`);
+}
+
+function resolveMailboxRunCorrelationId(value: unknown): string {
+  if (typeof value === "string" && UUID_PATTERN.test(value.trim())) {
+    return value.trim();
+  }
+  return randomUUID();
+}
+
+async function fetchMailboxHistoryBoundaryStub(_input: {
+  tenantId: string;
+  mailboxId: string;
+  provider: string;
+  correlationId: string;
+  fromHistoryId: string;
+  toHistoryId: string;
+}): Promise<{ fetchedCount: number; events: unknown[] }> {
+  return {
+    fetchedCount: 0,
+    events: []
+  };
 }
 
 async function withTenantClient<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>) {
@@ -713,6 +744,10 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
     const safeMailboxId =
       typeof job.data.mailboxId === "string" && job.data.mailboxId.length > 0 ? job.data.mailboxId : undefined;
     const provider = job.data.provider ?? "gmail";
+    let mailboxRunId: string | null = null;
+    let mailboxRunCorrelationId = resolveMailboxRunCorrelationId(undefined);
+    let mailboxRunFromHistoryId = "0";
+    let mailboxRunToHistoryId = "0";
 
     const baseLogContext = toStructuredLogContext({
       tenantId: safeTenantId,
@@ -739,6 +774,80 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
     try {
       const tenantId = assertRequiredString(job.data.tenantId, "tenantId");
       const mailboxId = assertRequiredString(job.data.mailboxId, "mailboxId");
+
+      const runInit = await withTenantClient(tenantId, async (client) => {
+        const stateResult = await client.query(
+          `
+            SELECT
+              last_history_id::text AS last_history_id,
+              pending_max_history_id::text AS pending_max_history_id,
+              last_correlation_id::text AS last_correlation_id
+            FROM mailbox_sync_state
+            WHERE tenant_id = $1
+              AND mailbox_id = $2
+              AND provider = $3
+            FOR UPDATE
+          `,
+          [tenantId, mailboxId, provider]
+        );
+        const state = stateResult.rows[0] as MailboxSyncStateSnapshotRow | undefined;
+        if (!state) {
+          throw new Error("mailbox_sync_state missing for mailbox/provider");
+        }
+
+        const correlationId = resolveMailboxRunCorrelationId(state.last_correlation_id);
+        const fromHistoryId = String(state.last_history_id ?? "0");
+        const toHistoryId = String(state.pending_max_history_id ?? fromHistoryId);
+
+        const insertResult = await client.query(
+          `
+            INSERT INTO mailbox_sync_runs (
+              tenant_id,
+              mailbox_id,
+              provider,
+              correlation_id,
+              from_history_id,
+              to_history_id,
+              fetched_count,
+              status,
+              started_at,
+              created_at
+            )
+            VALUES ($1, $2, $3, $4::uuid, $5, $6, 0, 'done', now(), now())
+            RETURNING id::text AS id
+          `,
+          [tenantId, mailboxId, provider, correlationId, fromHistoryId, toHistoryId]
+        );
+
+        return {
+          runId: String(insertResult.rows[0]?.id ?? ""),
+          correlationId,
+          fromHistoryId,
+          toHistoryId
+        };
+      });
+
+      mailboxRunId = runInit.runId;
+      mailboxRunCorrelationId = runInit.correlationId;
+      mailboxRunFromHistoryId = runInit.fromHistoryId;
+      mailboxRunToHistoryId = runInit.toHistoryId;
+
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "mailbox.sync.run.start",
+          correlationId: mailboxRunCorrelationId,
+          tenantId,
+          mailboxId,
+          provider,
+          runId: mailboxRunId,
+          fromHistoryId: mailboxRunFromHistoryId,
+          toHistoryId: mailboxRunToHistoryId,
+          jobId: job.id?.toString() ?? null,
+          attempt,
+          maxAttempts
+        })
+      );
 
       const maxDrainPasses = 5;
       let drainPasses = 0;
@@ -869,6 +978,37 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
         };
       }
 
+      mailboxRunToHistoryId = result.lastHistoryId;
+      const historyFetchBoundary = await fetchMailboxHistoryBoundaryStub({
+        tenantId,
+        mailboxId,
+        provider,
+        correlationId: mailboxRunCorrelationId,
+        fromHistoryId: mailboxRunFromHistoryId,
+        toHistoryId: mailboxRunToHistoryId
+      });
+
+      if (mailboxRunId) {
+        await withTenantClient(tenantId, async (client) => {
+          await client.query(
+            `
+              UPDATE mailbox_sync_runs
+              SET
+                from_history_id = $3,
+                to_history_id = $4,
+                fetched_count = $5,
+                status = 'done',
+                last_error_class = NULL,
+                last_error = NULL,
+                finished_at = now()
+              WHERE id = $1::uuid
+                AND tenant_id = $2::uuid
+            `,
+            [mailboxRunId, tenantId, mailboxRunFromHistoryId, mailboxRunToHistoryId, historyFetchBoundary.fetchedCount]
+          );
+        });
+      }
+
       if (result.mode === "ignored") {
         // eslint-disable-next-line no-console
         console.log(
@@ -885,6 +1025,25 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
           })
         );
       }
+
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify({
+          event: "mailbox.sync.run.done",
+          correlationId: mailboxRunCorrelationId,
+          tenantId,
+          mailboxId,
+          provider,
+          runId: mailboxRunId,
+          fromHistoryId: mailboxRunFromHistoryId,
+          toHistoryId: mailboxRunToHistoryId,
+          fetchedCount: historyFetchBoundary.fetchedCount,
+          elapsedMs: Date.now() - startedAt,
+          jobId: job.id?.toString() ?? null,
+          attempt,
+          maxAttempts
+        })
+      );
 
       // eslint-disable-next-line no-console
       console.log(
@@ -927,6 +1086,51 @@ const mailboxSyncWorker = new Worker<MailboxSyncJob>(
           // ignore best-effort persistence failure
         }
       }
+
+      if (mailboxRunId && safeTenantId && safeMailboxId) {
+        try {
+          const failedStatus =
+            errorClass === ErrorClass.TRANSIENT ? "failed_transient" : "failed_permanent";
+          const failedErrorClass =
+            errorClass === ErrorClass.TRANSIENT ? "transient" : "permanent";
+          await withTenantClient(safeTenantId, async (client) => {
+            await client.query(
+              `
+                UPDATE mailbox_sync_runs
+                SET
+                  status = $3,
+                  last_error_class = $4,
+                  last_error = LEFT($5, 1000),
+                  finished_at = now()
+                WHERE id = $1::uuid
+                  AND tenant_id = $2::uuid
+              `,
+              [mailboxRunId, safeTenantId, failedStatus, failedErrorClass, structuredError.message]
+            );
+          });
+        } catch {
+          // ignore best-effort persistence failure
+        }
+      }
+
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify({
+          event: "mailbox.sync.run.error",
+          correlationId: mailboxRunCorrelationId,
+          tenantId: safeTenantId ?? null,
+          mailboxId: safeMailboxId ?? null,
+          provider,
+          runId: mailboxRunId,
+          fromHistoryId: mailboxRunFromHistoryId,
+          toHistoryId: mailboxRunToHistoryId,
+          errorClass,
+          errorMessage: structuredError.message,
+          jobId: job.id?.toString() ?? null,
+          attempt,
+          maxAttempts
+        })
+      );
 
       // eslint-disable-next-line no-console
       console.error(
