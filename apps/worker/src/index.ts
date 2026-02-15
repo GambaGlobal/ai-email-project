@@ -29,6 +29,19 @@ type DocsIngestionJob = {
 
 const workerName = process.env.WORKER_NAME ?? "worker";
 const docsQueueName = "docs_ingestion";
+const mailNotificationsQueueName = "mail_notifications";
+
+type MailNotificationJob = {
+  tenantId: string;
+  mailboxId?: string | null;
+  provider?: "gmail";
+  stage?: "mail_notification";
+  correlationId?: CorrelationId;
+  messageId?: string;
+  receiptId?: string;
+  gmailHistoryId?: string | null;
+  emailAddress?: string | null;
+};
 
 if (!process.env.REDIS_URL) {
   // eslint-disable-next-line no-console
@@ -57,6 +70,13 @@ function truncateText(value: string | undefined, max: number): string | undefine
     return undefined;
   }
   return value.length > max ? value.slice(0, max) : value;
+}
+
+function assertRequiredString(value: unknown, fieldName: string): string {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  throw new Error(`Missing required field: ${fieldName}`);
 }
 
 async function withTenantClient<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>) {
@@ -437,7 +457,122 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
   }
 );
 
-ingestionWorker.on("ready", () => {
+const mailNotificationsWorker = new Worker<MailNotificationJob>(
+  mailNotificationsQueueName,
+  async (job) => {
+    const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
+    const provider = job.data.provider ?? "gmail";
+    const stage = job.data.stage ?? "mail_notification";
+    const safeCorrelationId =
+      typeof job.data.correlationId === "string" && job.data.correlationId.length > 0
+        ? (job.data.correlationId as CorrelationId)
+        : undefined;
+
+    const baseLogContext = toStructuredLogContext({
+      tenantId:
+        typeof job.data.tenantId === "string" && job.data.tenantId.length > 0
+          ? job.data.tenantId
+          : undefined,
+      mailboxId:
+        typeof job.data.mailboxId === "string" && job.data.mailboxId.length > 0
+          ? job.data.mailboxId
+          : undefined,
+      provider,
+      stage,
+      queueName: job.queueName,
+      jobId: job.id?.toString(),
+      correlationId: safeCorrelationId,
+      messageId:
+        typeof job.data.messageId === "string" && job.data.messageId.length > 0
+          ? job.data.messageId
+          : undefined,
+      gmailHistoryId:
+        typeof job.data.gmailHistoryId === "string" && job.data.gmailHistoryId.length > 0
+          ? job.data.gmailHistoryId
+          : undefined
+    });
+    const attempt = job.attemptsMade + 1;
+    const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
+
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify(
+        toStructuredLogEvent(baseLogContext, "job.start", {
+          startedAt: startedAtIso,
+          attempt,
+          maxAttempts
+        })
+      )
+    );
+
+    try {
+      const tenantId = assertRequiredString(job.data.tenantId, "tenantId");
+      const correlationId = assertRequiredString(job.data.correlationId, "correlationId");
+      const messageId = assertRequiredString(job.data.messageId, "messageId");
+      const receiptId = assertRequiredString(job.data.receiptId, "receiptId");
+
+      void tenantId;
+      void correlationId;
+      void messageId;
+      // No provider side-effects in this step; this worker validates and records deterministic processing skeleton.
+      void receiptId;
+
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
+          })
+        )
+      );
+    } catch (error) {
+      const classifiedError = classifyError(error);
+      const errorClass =
+        classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
+      const structuredError = toLogError(error);
+      const truncatedStack = truncateText(toSafeStack(structuredError.stack), 4000);
+
+      // eslint-disable-next-line no-console
+      console.error(
+        JSON.stringify(
+          toStructuredLogEvent(baseLogContext, "job.error", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts,
+            errorClass,
+            errorCode: structuredError.code ?? classifiedError.code,
+            errorMessage: structuredError.message,
+            errorStack: truncatedStack
+          })
+        )
+      );
+
+      if (errorClass === ErrorClass.PERMANENT) {
+        throw new UnrecoverableError(structuredError.message);
+      }
+
+      throw error;
+    }
+  },
+  {
+    connection: redisConnection
+  }
+);
+
+let readyLogPrinted = false;
+const emitWorkerReady = () => {
+  if (readyLogPrinted) {
+    return;
+  }
+  readyLogPrinted = true;
   // eslint-disable-next-line no-console
   console.log(`worker ready (${workerName}) at ${new Date().toISOString()}`);
-});
+};
+
+ingestionWorker.on("ready", emitWorkerReady);
+mailNotificationsWorker.on("ready", emitWorkerReady);

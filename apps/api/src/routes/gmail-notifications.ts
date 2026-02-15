@@ -1,6 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { asCorrelationId, newCorrelationId } from "@ai-email/shared";
 import { queryOne, queryRowsGlobal, withTenantClient } from "../lib/db.js";
+import {
+  enqueueMailNotification,
+  mailNotificationJobId,
+  MAIL_NOTIFICATIONS_QUEUE
+} from "../lib/mail-notifications-queue.js";
 import { toPubsubIdentifiers, toStructuredLogContext, toStructuredLogEvent } from "../logging.js";
 
 const UUID_PATTERN =
@@ -19,6 +24,12 @@ type PubsubPushBody = {
 type DecodedNotificationPayload = {
   emailAddress?: string;
   historyId?: string;
+};
+
+type ReceiptRow = {
+  id: string;
+  enqueued_at: string | null;
+  enqueued_job_id: string | null;
 };
 
 function resolveCorrelationId(headers: Record<string, unknown>) {
@@ -119,8 +130,8 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
     const headers = request.headers as Record<string, unknown>;
     const correlationId = resolveCorrelationId(headers);
     const provider = "gmail";
-    const stage = "notification_ingestion";
-    const queueName = "mail_notifications";
+    const stage = "mail_notification";
+    const queueName = MAIL_NOTIFICATIONS_QUEUE;
 
     const parsed = parsePubsubBody(request.body);
     const messageId = parsed.messageId;
@@ -200,8 +211,8 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const insertResult = await withTenantClient(tenantId, async (client) => {
-        const row = await queryOne(
+      const outcome = await withTenantClient(tenantId, async (client) => {
+        const inserted = await queryOne(
           client,
           `
             INSERT INTO mail_notification_receipts (
@@ -214,15 +225,138 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
             )
             VALUES ($1, $2, $3, $4, $5, $6::jsonb)
             ON CONFLICT (tenant_id, provider, message_id) DO NOTHING
-            RETURNING id::text AS id
+            RETURNING id::text AS id, enqueued_at::text AS enqueued_at, enqueued_job_id
           `,
           [tenantId, mailboxId, provider, messageId, parsed.gmailHistoryId, JSON.stringify(parsed.payload)]
         );
 
-        return row;
+        const receipt =
+          (inserted as ReceiptRow | null) ??
+          ((await queryOne(
+            client,
+            `
+              SELECT id::text AS id, enqueued_at::text AS enqueued_at, enqueued_job_id
+              FROM mail_notification_receipts
+              WHERE tenant_id = $1
+                AND provider = $2
+                AND message_id = $3
+              FOR UPDATE
+            `,
+            [tenantId, provider, messageId]
+          )) as ReceiptRow | null);
+
+        if (!receipt) {
+          return {
+            kind: "error",
+            errorMessage: "receipt-not-found-after-insert"
+          } as const;
+        }
+
+        const alreadyEnqueued = receipt.enqueued_at !== null;
+        if (alreadyEnqueued) {
+          return {
+            kind: "already_enqueued",
+            inserted: inserted !== null,
+            receiptId: receipt.id,
+            jobId: receipt.enqueued_job_id
+          } as const;
+        }
+
+        const jobId = mailNotificationJobId(receipt.id);
+
+        try {
+          const enqueueResult = await enqueueMailNotification(
+            {
+              tenantId,
+              mailboxId,
+              provider: "gmail",
+              stage: "mail_notification",
+              correlationId,
+              messageId,
+              receiptId: receipt.id,
+              gmailHistoryId: parsed.gmailHistoryId,
+              emailAddress: parsed.emailAddress
+            },
+            jobId
+          );
+
+          await client.query(
+            `
+              UPDATE mail_notification_receipts
+              SET
+                enqueued_at = now(),
+                enqueued_job_id = $3,
+                last_error = NULL
+              WHERE tenant_id = $1
+                AND id = $2
+            `,
+            [tenantId, receipt.id, enqueueResult.jobId ?? jobId]
+          );
+
+          return {
+            kind: "enqueued",
+            inserted: inserted !== null,
+            receiptId: receipt.id,
+            jobId: enqueueResult.jobId ?? jobId
+          } as const;
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          await client.query(
+            `
+              UPDATE mail_notification_receipts
+              SET last_error = LEFT($3, 500)
+              WHERE tenant_id = $1
+                AND id = $2
+            `,
+            [tenantId, receipt.id, errorMessage]
+          );
+
+          return {
+            kind: "enqueue_failed",
+            inserted: inserted !== null,
+            receiptId: receipt.id,
+            errorMessage
+          } as const;
+        }
       });
 
-      if (!insertResult) {
+      if (outcome.kind === "error") {
+        request.log.error(
+          {
+            correlationId,
+            tenantId,
+            provider,
+            messageId,
+            errorMessage: outcome.errorMessage
+          },
+          "Failed to resolve notification receipt"
+        );
+        return reply.code(500).send({ error: "Failed to process notification" });
+      }
+
+      if (outcome.inserted) {
+        request.log.info(
+          toStructuredLogEvent(baseLogContext, "mail.notification.received", {
+            ...toPubsubIdentifiers(headers)
+          }),
+          "Gmail notification received"
+        );
+
+        console.log(
+          JSON.stringify({
+            event: "mail.notification.received",
+            correlationId,
+            tenantId,
+            mailboxId,
+            provider,
+            messageId,
+            gmailHistoryId: parsed.gmailHistoryId,
+            receiptId: outcome.receiptId
+          })
+        );
+      }
+
+      if (outcome.kind === "already_enqueued") {
         request.log.info(
           toStructuredLogEvent(baseLogContext, "mail.notification.deduped", {
             ...toPubsubIdentifiers(headers)
@@ -237,33 +371,52 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
             tenantId,
             provider,
             messageId,
-            reason: "duplicate_receipt"
+            reason: "duplicate_receipt",
+            receiptId: outcome.receiptId,
+            jobId: outcome.jobId
           })
         );
 
         return reply.code(204).send();
       }
 
+      if (outcome.kind === "enqueue_failed") {
+        request.log.error(
+          {
+            correlationId,
+            tenantId,
+            provider,
+            messageId,
+            receiptId: outcome.receiptId,
+            errorMessage: outcome.errorMessage
+          },
+          "Failed to enqueue Gmail notification"
+        );
+        return reply.code(500).send({ error: "Failed to enqueue notification" });
+      }
+
       request.log.info(
-        toStructuredLogEvent(baseLogContext, "mail.notification.received", {
+        toStructuredLogEvent(baseLogContext, "mail.notification.enqueued", {
           ...toPubsubIdentifiers(headers)
         }),
-        "Gmail notification received"
+        "Gmail notification enqueued"
       );
 
       console.log(
         JSON.stringify({
-          event: "mail.notification.received",
+          event: "mail.notification.enqueued",
           correlationId,
           tenantId,
           mailboxId,
           provider,
           messageId,
-          gmailHistoryId: parsed.gmailHistoryId
+          gmailHistoryId: parsed.gmailHistoryId,
+          receiptId: outcome.receiptId,
+          jobId: outcome.jobId,
+          queueName
         })
       );
 
-      // Queue enqueue happens after insert; dedupe must remain the boundary guard.
       return reply.code(204).send();
     } catch (error) {
       request.log.error(
@@ -276,7 +429,7 @@ const gmailNotificationRoutes: FastifyPluginAsync = async (app) => {
         },
         "Failed to persist Gmail notification receipt"
       );
-      return reply.code(204).send();
+      return reply.code(500).send({ error: "Failed to process notification" });
     }
   });
 };

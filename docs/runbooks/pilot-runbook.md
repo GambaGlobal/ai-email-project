@@ -152,6 +152,19 @@ Log verification:
 Receipt ledger verification:
 - `psql "$DATABASE_URL" -c "SELECT count(*) FROM mail_notification_receipts WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid AND provider='gmail' AND message_id='<messageId>';"`
 
+## Gmail notifications fanout gate
+Guarantee:
+- Receipt dedupe happens first at DB boundary.
+- Enqueue to `mail_notifications` happens exactly once per receipt (`enqueued_at` + `enqueued_job_id`).
+- If enqueue fails, receipt remains with `enqueued_at IS NULL` and Pub/Sub retry can re-attempt enqueue.
+
+Run deterministic fanout smoke:
+1. `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" pnpm -w smoke:notify-fanout`
+
+Log debugging commands:
+- `rg -a "<CID>" /tmp/ai-email-api.log | rg -e "mail.notification.received|mail.notification.enqueued|mail.notification.deduped"`
+- `rg -a "<CID>" /tmp/ai-email-worker.log | rg -e "job.start|job.done|job.error"`
+
 ## One-command local dev
 Use this for a single-command bring-up/tear-down loop:
 1. `pnpm -w dev:up`
