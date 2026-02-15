@@ -8,8 +8,6 @@ import { dirname } from "node:path";
 
 const defaults = {
   REDIS_URL: "redis://127.0.0.1:6379",
-  DOCS_STORAGE: "local",
-  DOCS_LOCAL_DIR: "/tmp/ai-email-docs",
   TENANT_AUTOSEED: "1",
   DATABASE_URL: "postgresql://127.0.0.1:5432/ai_email_dev",
   AI_EMAIL_API_LOG: "/tmp/ai-email-api.log",

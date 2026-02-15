@@ -554,24 +554,29 @@ Use the repo bootstrap to avoid PATH and readiness guesswork:
 - Before success exit, it runs the same `pg_available_extensions` verification query again and fails non-zero if `vector` is still unavailable.
 - Prints the exact `DATABASE_URL` for your environment.
 
-## Local storage mode (no AWS/S3 required)
-Fully green local smoke sequence (Redis + Postgres + local docs):
+## Cloud S3 storage setup
+Docs upload/download uses cloud S3-compatible storage (no local docs disk mode). For required env vars, CORS, and security checklist:
+- `docs/dev/s3-doc-storage.md`
+
+Minimal local app run sequence (Redis + Postgres + cloud S3):
 1. `pnpm -w db:setup`
 2. `export DATABASE_URL="..."` (copy the exact value printed by `db:setup`)
 3. `export REDIS_URL=redis://127.0.0.1:6379`
-4. `export DOCS_STORAGE=local`
-5. `export DOCS_LOCAL_DIR=/tmp/ai-email-docs` (optional; default is `<repo>/.tmp/docs`)
-6. `export TENANT_AUTOSEED=1` (dev-only; enables automatic tenant seed on docs ingest)
-7. Terminal A: `pnpm -w --filter @ai-email/api dev 2>&1 | tee /tmp/ai-email-api.log`
-8. Terminal B: `pnpm -w --filter @ai-email/worker dev 2>&1 | tee /tmp/ai-email-worker.log`
-9. Terminal C: `pnpm -w smoke:correlation 2>&1 | tee /tmp/ai-email-smoke.log`
-10. Terminal C:
-    `CID="$(perl -ne 'if(/correlationId=([A-Za-z0-9_-]+)/){print $1; exit}' /tmp/ai-email-smoke.log)"`
-11. Terminal C:
-    `echo "CID=$CID"`
+4. `export S3_BUCKET="<your-dev-bucket>"`
+5. `export S3_REGION="<your-region>"`
+6. `export S3_ENDPOINT="<optional-s3-compatible-endpoint>"`
+7. `export S3_FORCE_PATH_STYLE=0` (set `1` only when endpoint requires path-style)
+8. `export TENANT_AUTOSEED=1` (dev-only; enables automatic tenant seed on docs ingest)
+9. Terminal A: `pnpm -w --filter @ai-email/api dev 2>&1 | tee /tmp/ai-email-api.log`
+10. Terminal B: `pnpm -w --filter @ai-email/worker dev 2>&1 | tee /tmp/ai-email-worker.log`
+11. Terminal C: `pnpm -w smoke:correlation 2>&1 | tee /tmp/ai-email-smoke.log`
 12. Terminal C:
-    `rg "$CID" /tmp/ai-email-api.log`
+    `CID="$(perl -ne 'if(/correlationId=([A-Za-z0-9_-]+)/){print $1; exit}' /tmp/ai-email-smoke.log)"`
 13. Terminal C:
+    `echo "CID=$CID"`
+14. Terminal C:
+    `rg "$CID" /tmp/ai-email-api.log`
+15. Terminal C:
     `rg -a "$CID" /tmp/ai-email-worker.log`
 
 DB note:
@@ -581,9 +586,8 @@ DB note:
 Grep tip for worker logs:
 - `/tmp` log files piped through `tee` may be detected as binary by `rg`; use `rg -a "$CID" /tmp/ai-email-worker.log`.
 
-Expected local file location:
-- If `DOCS_LOCAL_DIR` is set: `<DOCS_LOCAL_DIR>/tenants/<tenantId>/docs/<docId>/<filename>`
-- Default path: `.tmp/docs/tenants/<tenantId>/docs/<docId>/<filename>` at the repo root.
+Expected object location:
+- `s3://<bucket>/tenants/<tenantId>/docs/<docId>/versions/<versionId>/raw/<safeFilename>`
 
 ## Typecheck commands
 Use these commands for local reliability checks:

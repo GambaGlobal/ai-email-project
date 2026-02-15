@@ -1,43 +1,89 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+
+const DEFAULT_PRESIGN_TTL_SECONDS = 300;
+
+export type S3Config = {
+  bucket: string;
+  region: string;
+  endpoint?: string;
+  forcePathStyle: boolean;
+  presignTtlSeconds: number;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+};
 
 let s3Client: S3Client | null = null;
-const LOCAL_DOCS_BUCKET = "local";
-const LOCAL_STORAGE_SCHEME = "file";
+let resolvedConfig: S3Config | null = null;
 
-export type DocsStorageMode = "s3" | "local";
-
-function normalizeStorageMode(value: string | undefined): DocsStorageMode | null {
-  if (value === "s3" || value === "local") {
-    return value;
+function parseOptionalBoolean(value: string | undefined): boolean {
+  if (!value) {
+    return false;
   }
-  return null;
+  return value === "1" || value.toLowerCase() === "true";
 }
 
-function resolveDefaultDocsLocalDir(): string {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  return resolvePath(moduleDir, "../../../../.tmp/docs");
-}
-
-function resolveDocsLocalDir(): string {
-  if (typeof process.env.DOCS_LOCAL_DIR === "string" && process.env.DOCS_LOCAL_DIR.trim().length > 0) {
-    return resolvePath(process.env.DOCS_LOCAL_DIR.trim());
+function parsePresignTtlSeconds(value: string | undefined): number {
+  if (!value) {
+    return DEFAULT_PRESIGN_TTL_SECONDS;
   }
-  return resolveDefaultDocsLocalDir();
-}
 
-function getS3BucketName(): string {
-  return process.env.S3_BUCKET_DOCS ?? process.env.S3_BUCKET ?? "";
-}
-
-export function resolveDocsStorageMode(): DocsStorageMode {
-  const explicitMode = normalizeStorageMode(process.env.DOCS_STORAGE);
-  if (explicitMode) {
-    return explicitMode;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("S3_PRESIGN_TTL_SECONDS must be a positive number");
   }
-  return getS3BucketName() ? "s3" : "local";
+
+  return Math.floor(parsed);
+}
+
+export function loadS3Config(env: NodeJS.ProcessEnv = process.env): S3Config {
+  const bucket = env.S3_BUCKET?.trim() ?? env.S3_BUCKET_DOCS?.trim() ?? "";
+  const region = env.S3_REGION?.trim() ?? "";
+  const endpoint = env.S3_ENDPOINT?.trim() || undefined;
+  const accessKeyId = env.S3_ACCESS_KEY_ID?.trim() || undefined;
+  const secretAccessKey = env.S3_SECRET_ACCESS_KEY?.trim() || undefined;
+
+  if (!bucket) {
+    throw new Error("Missing S3_BUCKET (or S3_BUCKET_DOCS)");
+  }
+
+  if (!region) {
+    throw new Error("Missing S3_REGION");
+  }
+
+  if ((accessKeyId && !secretAccessKey) || (!accessKeyId && secretAccessKey)) {
+    throw new Error("S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together");
+  }
+
+  return {
+    bucket,
+    region,
+    endpoint,
+    forcePathStyle: parseOptionalBoolean(env.S3_FORCE_PATH_STYLE) || Boolean(endpoint),
+    presignTtlSeconds: parsePresignTtlSeconds(env.S3_PRESIGN_TTL_SECONDS),
+    accessKeyId,
+    secretAccessKey
+  };
+}
+
+export function getS3Config(): S3Config {
+  if (resolvedConfig) {
+    return resolvedConfig;
+  }
+
+  resolvedConfig = loadS3Config();
+  return resolvedConfig;
+}
+
+export function validateS3ConfigOnBoot(): void {
+  getS3Config();
 }
 
 export function getS3Client(): S3Client {
@@ -45,51 +91,33 @@ export function getS3Client(): S3Client {
     return s3Client;
   }
 
-  const region = process.env.S3_REGION;
-  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
-
-  if (!region || !accessKeyId || !secretAccessKey) {
-    throw new Error("Missing S3 configuration env for docs storage");
-  }
+  const config = getS3Config();
 
   s3Client = new S3Client({
-    region,
-    endpoint: process.env.S3_ENDPOINT,
-    credentials: {
-      accessKeyId,
-      secretAccessKey
-    },
-    forcePathStyle: Boolean(process.env.S3_ENDPOINT)
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: config.forcePathStyle,
+    credentials:
+      config.accessKeyId && config.secretAccessKey
+        ? {
+            accessKeyId: config.accessKeyId,
+            secretAccessKey: config.secretAccessKey
+          }
+        : undefined
   });
 
   return s3Client;
 }
 
 export function resolveDocsBucket(): string {
-  if (resolveDocsStorageMode() === "local") {
-    return LOCAL_DOCS_BUCKET;
-  }
-
-  const bucket = getS3BucketName();
-
-  if (!bucket) {
-    throw new Error("Missing docs bucket env (S3_BUCKET_DOCS or S3_BUCKET)");
-  }
-
-  return bucket;
+  return getS3Config().bucket;
 }
 
 export function resolveDocsStorageProvider(): string {
-  return resolveDocsStorageMode();
+  return "s3";
 }
 
 export function toDocsStorageUri(input: { bucket: string; key: string }): string {
-  if (resolveDocsStorageMode() === "local") {
-    const localRoot = resolveDocsLocalDir();
-    return `${LOCAL_STORAGE_SCHEME}://${resolvePath(localRoot, input.key)}`;
-  }
-
   return `s3://${input.bucket}/${input.key}`;
 }
 
@@ -99,16 +127,7 @@ export async function putDocObject(input: {
   body: Buffer;
   contentType?: string;
 }): Promise<void> {
-  if (resolveDocsStorageMode() === "local") {
-    const targetPath = resolvePath(resolveDocsLocalDir(), input.key);
-    await mkdir(dirname(targetPath), { recursive: true });
-    await writeFile(targetPath, input.body);
-    return;
-  }
-
-  const client = getS3Client();
-
-  await client.send(
+  await getS3Client().send(
     new PutObjectCommand({
       Bucket: input.bucket,
       Key: input.key,
@@ -119,25 +138,73 @@ export async function putDocObject(input: {
 }
 
 export async function deleteDocObject(input: { bucket: string; key: string }): Promise<void> {
-  if (resolveDocsStorageMode() === "local") {
-    const targetPath = resolvePath(resolveDocsLocalDir(), input.key);
-    try {
-      await unlink(targetPath);
-    } catch (error) {
-      const typedError = error as NodeJS.ErrnoException;
-      if (typedError.code !== "ENOENT") {
-        throw error;
-      }
-    }
-    return;
-  }
-
-  const client = getS3Client();
-
-  await client.send(
+  await getS3Client().send(
     new DeleteObjectCommand({
       Bucket: input.bucket,
       Key: input.key
     })
   );
+}
+
+export async function headDocObject(input: { bucket: string; key: string }): Promise<{
+  contentLength: number | null;
+  contentType: string | null;
+}> {
+  const response = await getS3Client().send(
+    new HeadObjectCommand({
+      Bucket: input.bucket,
+      Key: input.key
+    })
+  );
+
+  return {
+    contentLength:
+      typeof response.ContentLength === "number" && Number.isFinite(response.ContentLength)
+        ? response.ContentLength
+        : null,
+    contentType: response.ContentType ?? null
+  };
+}
+
+export async function createRawUploadPresignedPost(input: {
+  key: string;
+  maxBytes: number;
+  expiresInSeconds?: number;
+}): Promise<{
+  url: string;
+  fields: Record<string, string>;
+  expiresInSeconds: number;
+}> {
+  const config = getS3Config();
+  const expiresInSeconds = input.expiresInSeconds ?? config.presignTtlSeconds;
+  const post = await createPresignedPost(getS3Client(), {
+    Bucket: config.bucket,
+    Key: input.key,
+    Expires: expiresInSeconds,
+    Conditions: [["content-length-range", 1, input.maxBytes]]
+  });
+
+  return {
+    url: post.url,
+    fields: post.fields,
+    expiresInSeconds
+  };
+}
+
+export async function createRawDownloadSignedUrl(input: {
+  key: string;
+  expiresInSeconds?: number;
+}): Promise<{ url: string; expiresInSeconds: number }> {
+  const config = getS3Config();
+  const expiresInSeconds = input.expiresInSeconds ?? config.presignTtlSeconds;
+  const url = await getSignedUrl(
+    getS3Client(),
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: input.key
+    }),
+    { expiresIn: expiresInSeconds }
+  );
+
+  return { url, expiresInSeconds };
 }

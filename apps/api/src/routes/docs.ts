@@ -18,9 +18,9 @@ import {
 import { enqueueDocIngestion } from "../lib/docs-queue.js";
 import { toPubsubIdentifiers, toStructuredLogContext, toStructuredLogEvent } from "../logging.js";
 
-// Expected API env for docs upload (storage mode auto-falls back to local when no S3 bucket env is set):
-// DOCS_STORAGE ("s3" | "local"), DOCS_LOCAL_DIR (optional when local),
-// S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_DOCS (or S3_BUCKET),
+// Expected API env for docs upload:
+// S3_BUCKET (or S3_BUCKET_DOCS), S3_REGION, optional S3_ENDPOINT/S3_FORCE_PATH_STYLE,
+// optional S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY (for static credentials),
 // plus REDIS_URL for BullMQ enqueueing.
 const DOC_CATEGORIES = ["Policies", "Itineraries", "FAQs", "Packing"] as const;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
