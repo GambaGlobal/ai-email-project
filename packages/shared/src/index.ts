@@ -1,4 +1,5 @@
 export * from "./mail";
+export * from "./docs";
 
 export type {
   AuditEvent,
