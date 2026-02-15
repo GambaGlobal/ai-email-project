@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDecipheriv } from "node:crypto";
-import { Queue, UnrecoverableError, Worker } from "bullmq";
+import { Queue, UnrecoverableError, Worker, type Job } from "bullmq";
 import IORedis from "ioredis";
 import { Pool, type PoolClient } from "pg";
 import { GmailProvider } from "../../../packages/mail-gmail/src/gmail-provider.js";
@@ -8,6 +8,7 @@ import {
   type GetThreadRequest,
   type Cursor,
   DEFAULT_JOB_ATTEMPTS,
+  DOCS_INGESTION_V1_JOB_NAME,
   ErrorClass,
   type LabelId,
   type LabelKey,
@@ -28,6 +29,9 @@ import {
   type CorrelationId
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
+import { buildExtractedMetadataKey, buildExtractedTextKey } from "./docs/keys.js";
+import { downloadDocObject, uploadTextArtifact } from "./docs/s3.js";
+import { extractText } from "./docs/extract.js";
 import {
   syncMailbox,
   type MailboxCursorStore,
@@ -64,6 +68,13 @@ type DocsIngestionJob = {
   bucket: string;
   storageKey: string;
   category: string;
+};
+
+type DocVersionIngestionJob = {
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  correlationId: CorrelationId;
 };
 
 const workerName = process.env.WORKER_NAME ?? "worker";
@@ -704,6 +715,37 @@ type IngestionTransitionResult =
   | { mode: "started" }
   | { mode: "noop"; reason: "already_processing" | "already_done" | "ignored" | "doc_not_found" | "unknown" };
 
+type DocVersionRow = {
+  id: string;
+  tenant_id: string;
+  doc_id: string;
+  state: string;
+  raw_file_key: string | null;
+  extracted_text_key: string | null;
+  mime_type: string | null;
+  source_filename: string | null;
+  bytes: string | number | null;
+  sha256: string | null;
+};
+
+type IngestionErrorCode =
+  | "DOC_VERSION_NOT_FOUND"
+  | "RAW_FILE_KEY_MISSING"
+  | "S3_GET_FAILED"
+  | "S3_PUT_FAILED"
+  | "UNSUPPORTED_TYPE"
+  | "EXTRACT_FAILED"
+  | "DB_UPDATE_FAILED";
+
+class DocIngestionError extends Error {
+  constructor(
+    readonly code: IngestionErrorCode,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
 async function beginDocIngestionTransition(tenantId: string, docId: string): Promise<IngestionTransitionResult> {
   return withTenantClient(tenantId, async (client) => {
     const updated = await client.query(
@@ -775,25 +817,327 @@ async function markDocIgnored(tenantId: string, docId: string, reason: string) {
   });
 }
 
-const ingestionWorker = new Worker<DocsIngestionJob>(
+async function getDocVersionForIngestion(
+  tenantId: string,
+  docId: string,
+  versionId: string
+): Promise<DocVersionRow | null> {
+  return withTenantClient(tenantId, async (client) => {
+    const result = await client.query(
+      `
+        SELECT
+          id,
+          tenant_id,
+          doc_id,
+          state,
+          raw_file_key,
+          extracted_text_key,
+          mime_type,
+          source_filename,
+          bytes,
+          sha256
+        FROM doc_versions
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id = $3
+        LIMIT 1
+      `,
+      [tenantId, docId, versionId]
+    );
+
+    return (result.rows[0] as DocVersionRow | undefined) ?? null;
+  });
+}
+
+async function markDocVersionProcessing(tenantId: string, docId: string, versionId: string): Promise<void> {
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        UPDATE doc_versions
+        SET
+          state = 'PROCESSING',
+          error_code = NULL,
+          error_message = NULL,
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id = $3
+      `,
+      [tenantId, docId, versionId]
+    );
+  });
+}
+
+async function markDocVersionSuccess(
+  tenantId: string,
+  docId: string,
+  versionId: string,
+  extractedTextKey: string
+): Promise<void> {
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        UPDATE doc_versions
+        SET
+          state = 'PROCESSING',
+          extracted_text_key = $4,
+          error_code = NULL,
+          error_message = NULL,
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id = $3
+      `,
+      [tenantId, docId, versionId, extractedTextKey]
+    );
+  });
+}
+
+async function markDocVersionError(
+  tenantId: string,
+  docId: string,
+  versionId: string,
+  input: {
+    code: IngestionErrorCode;
+    message: string;
+  }
+): Promise<void> {
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        UPDATE doc_versions
+        SET
+          state = 'ERROR',
+          error_code = $4,
+          error_message = LEFT($5, 2000),
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id = $3
+      `,
+      [tenantId, docId, versionId, input.code, input.message]
+    );
+  });
+}
+
+function toVersionIngestionError(error: unknown): {
+  code: IngestionErrorCode;
+  message: string;
+} {
+  if (error instanceof DocIngestionError) {
+    return { code: error.code, message: error.message };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "UNSUPPORTED_TYPE") {
+    return {
+      code: "UNSUPPORTED_TYPE",
+      message: "Unsupported document type for v1 extraction"
+    };
+  }
+  return { code: "EXTRACT_FAILED", message };
+}
+
+async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): Promise<void> {
+  const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
+  const { tenantId, docId, versionId, correlationId } = job.data;
+  const attempt = job.attemptsMade + 1;
+  const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
+  const baseLogContext = toStructuredLogContext({
+    tenantId,
+    provider: "other",
+    stage: "doc_ingestion",
+    queueName: job.queueName,
+    jobId: job.id?.toString(),
+    correlationId
+  });
+
+  // eslint-disable-next-line no-console
+  console.log(
+    JSON.stringify(
+      {
+        ...toStructuredLogEvent(baseLogContext, "job.start", {
+          startedAt: startedAtIso,
+          attempt,
+          maxAttempts
+        }),
+        parser: "pending",
+        docId,
+        versionId
+      }
+    )
+  );
+  try {
+    const version = await getDocVersionForIngestion(tenantId, docId, versionId);
+    if (!version) {
+      throw new DocIngestionError(
+        "DOC_VERSION_NOT_FOUND",
+        `Doc version not found tenantId=${tenantId} docId=${docId} versionId=${versionId}`
+      );
+    }
+    if (!version.raw_file_key) {
+      throw new DocIngestionError(
+        "RAW_FILE_KEY_MISSING",
+        `raw_file_key missing tenantId=${tenantId} docId=${docId} versionId=${versionId}`
+      );
+    }
+
+    await markDocVersionProcessing(tenantId, docId, versionId);
+
+    const rawObject = await downloadDocObject({ key: version.raw_file_key }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("S3_GET_FAILED", message);
+    });
+    const extracted = await extractText({
+      bytes: rawObject.body,
+      mimeType: version.mime_type ?? rawObject.contentType,
+      filename: version.source_filename
+    }).catch((error) => {
+      if (error instanceof Error && error.message === "UNSUPPORTED_TYPE") {
+        throw new DocIngestionError("UNSUPPORTED_TYPE", "Unsupported document type for v1 extraction");
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("EXTRACT_FAILED", message);
+    });
+
+    const extractedTextKey = buildExtractedTextKey({
+      tenantId,
+      docId,
+      versionId
+    });
+    const extractedMetadataKey = buildExtractedMetadataKey({
+      tenantId,
+      docId,
+      versionId
+    });
+
+    const metadata = {
+      tenantId,
+      docId,
+      versionId,
+      parser: extracted.meta.parser,
+      startedAt: startedAtIso,
+      finishedAt: new Date().toISOString(),
+      raw: {
+        key: version.raw_file_key,
+        mimeType: version.mime_type ?? rawObject.contentType,
+        bytes:
+          typeof version.bytes === "number"
+            ? version.bytes
+            : typeof version.bytes === "string"
+              ? Number(version.bytes)
+              : rawObject.contentLength,
+        sha256: version.sha256
+      },
+      extracted: {
+        textKey: extractedTextKey,
+        metadataKey: extractedMetadataKey,
+        charCount: extracted.meta.charCount,
+        warningCount: extracted.meta.warningCount,
+        warnings: extracted.meta.warnings,
+        pageCount: extracted.meta.pageCount
+      }
+    };
+
+    await uploadTextArtifact({
+      key: extractedTextKey,
+      body: extracted.text,
+      contentType: "text/plain; charset=utf-8"
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("S3_PUT_FAILED", message);
+    });
+
+    await uploadTextArtifact({
+      key: extractedMetadataKey,
+      body: JSON.stringify(metadata, null, 2),
+      contentType: "application/json; charset=utf-8"
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("S3_PUT_FAILED", message);
+    });
+
+    await markDocVersionSuccess(tenantId, docId, versionId, extractedTextKey).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("DB_UPDATE_FAILED", message);
+    });
+
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify(
+        {
+          ...toStructuredLogEvent(baseLogContext, "job.done", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts
+          }),
+          docId,
+          versionId,
+          parser: extracted.meta.parser,
+          extractedCharCount: extracted.meta.charCount
+        }
+      )
+    );
+  } catch (error) {
+    const normalized = toVersionIngestionError(error);
+    if (normalized.code !== "DOC_VERSION_NOT_FOUND") {
+      await markDocVersionError(tenantId, docId, versionId, normalized);
+    }
+    const structuredError = toLogError(error);
+
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify(
+        {
+          ...toStructuredLogEvent(baseLogContext, "job.error", {
+            startedAt: startedAtIso,
+            elapsedMs: Date.now() - startedAt,
+            attempt,
+            maxAttempts,
+            errorCode: normalized.code,
+            errorMessage: normalized.message,
+            errorStack: truncateText(toSafeStack(structuredError.stack), 4000)
+          }),
+          docId,
+          versionId
+        }
+      )
+    );
+
+    if (normalized.code === "DOC_VERSION_NOT_FOUND") {
+      throw new UnrecoverableError(normalized.message);
+    }
+    throw new UnrecoverableError(normalized.message);
+  }
+}
+
+const ingestionWorker = new Worker<DocsIngestionJob | DocVersionIngestionJob>(
   docsQueueName,
   async (job) => {
+    if (job.name === DOCS_INGESTION_V1_JOB_NAME) {
+      await processDocVersionIngestionV1(job as Job<DocVersionIngestionJob>);
+      return;
+    }
+    const legacyJobData = job.data as DocsIngestionJob;
+
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
-    const { tenantId, docId } = job.data;
-    const correlationId = job.data.correlationId;
+    const { tenantId, docId } = legacyJobData;
+    const correlationId = legacyJobData.correlationId;
     const baseLogContext = toStructuredLogContext({
-      tenantId: job.data.tenantId,
-      mailboxId: job.data.mailboxId,
-      provider: job.data.provider ?? "other",
-      stage: job.data.stage ?? "doc_ingestion",
+      tenantId: legacyJobData.tenantId,
+      mailboxId: legacyJobData.mailboxId,
+      provider: legacyJobData.provider ?? "other",
+      stage: legacyJobData.stage ?? "doc_ingestion",
       queueName: job.queueName,
       jobId: job.id?.toString(),
       correlationId,
-      causationId: job.data.causationId,
-      threadId: job.data.threadId,
-      messageId: job.data.messageId,
-      gmailHistoryId: job.data.gmailHistoryId
+      causationId: legacyJobData.causationId,
+      threadId: legacyJobData.threadId,
+      messageId: legacyJobData.messageId,
+      gmailHistoryId: legacyJobData.gmailHistoryId
     });
     const attempt = job.attemptsMade + 1;
     const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
@@ -947,7 +1291,7 @@ const ingestionWorker = new Worker<DocsIngestionJob>(
         classifiedError.class === ErrorClass.TRANSIENT ? ErrorClass.TRANSIENT : ErrorClass.PERMANENT;
       const structuredError = toLogError(error);
       const truncatedStack = truncateText(toSafeStack(structuredError.stack), 4000);
-      const stage = job.data.stage ?? "doc_ingestion";
+      const stage = legacyJobData.stage ?? "doc_ingestion";
 
       try {
         await withTenantClient(tenantId, async (client) => {

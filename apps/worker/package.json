@@ -9,8 +9,12 @@
   },
   "dependencies": {
     "@ai-email/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.990.0",
     "bullmq": "^5.12.12",
+    "html-to-text": "^9.0.5",
     "ioredis": "5.9.2",
+    "mammoth": "^1.11.0",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.11.5"
   },
   "devDependencies": {

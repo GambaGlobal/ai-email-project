@@ -16,6 +16,34 @@ This project stores raw customer documents in S3-compatible object storage as th
 - Finalize: API verifies object existence via S3 `HEAD` and persists key + metadata to `doc_versions`.
 - Download: API returns a short-lived presigned GET URL for tenant-owned objects only.
 
+## Ingestion Artifacts (Step 13.3)
+Worker job `doc.ingest.v1` reads `doc_versions.raw_file_key`, extracts deterministic text, and writes:
+- Extracted text:
+  - `tenants/{tenantId}/docs/{docId}/versions/{versionId}/extracted/text.txt`
+- Extract metadata:
+  - `tenants/{tenantId}/docs/{docId}/versions/{versionId}/extracted/metadata.json`
+
+`doc_versions.extracted_text_key` stores the `text.txt` key.
+
+Supported v1 types:
+- PDF
+- DOCX
+- TXT / MD
+- HTML
+
+No OCR is included in v1.
+
+### Enqueue Ingestion (Dev/Stage)
+Use the minimal enqueue script:
+
+```bash
+REDIS_URL="redis://127.0.0.1:6379" \
+TENANT_ID="<tenant-uuid>" \
+DOC_ID="<doc-uuid>" \
+VERSION_ID="<version-uuid>" \
+pnpm -w doc:ingest:enqueue
+```
+
 ## Tenant Isolation
 - Keys are tenant/doc/version scoped:
   - `tenants/{tenantId}/docs/{docId}/versions/{versionId}/raw/{safeFilename}`

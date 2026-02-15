@@ -2,8 +2,10 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import {
   DEFAULT_BULLMQ_JOB_OPTIONS,
+  DOCS_INGESTION_V1_JOB_NAME,
   asCorrelationId,
   docsIngestionJobId,
+  docsVersionIngestionJobId,
   newCorrelationId,
   type CorrelationId
 } from "@ai-email/shared";
@@ -11,7 +13,7 @@ import {
 const DOCS_INGESTION_QUEUE = "docs_ingestion";
 const DOCS_INGESTION_JOB = "docs.ingest";
 
-let queue: Queue<DocsIngestionJob> | null = null;
+let queue: Queue<DocsIngestionJob | DocVersionIngestionJob> | null = null;
 
 export type DocsIngestionJob = {
   tenantId: string;
@@ -33,6 +35,17 @@ export type DocsIngestionJobInput = Omit<DocsIngestionJob, "correlationId"> & {
   correlationId?: CorrelationId | string;
 };
 
+export type DocVersionIngestionJob = {
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  correlationId: CorrelationId;
+};
+
+export type DocVersionIngestionJobInput = Omit<DocVersionIngestionJob, "correlationId"> & {
+  correlationId?: CorrelationId | string;
+};
+
 function createRedisConnection(): IORedis {
   const redisUrl = process.env.REDIS_URL;
 
@@ -46,17 +59,17 @@ function createRedisConnection(): IORedis {
   });
 }
 
-function getQueue(): Queue<DocsIngestionJob> {
+function getQueue(): Queue<DocsIngestionJob | DocVersionIngestionJob> {
   if (queue) {
     return queue;
   }
 
-  queue = new Queue<DocsIngestionJob>(DOCS_INGESTION_QUEUE, {
+  queue = new Queue<DocsIngestionJob | DocVersionIngestionJob>(DOCS_INGESTION_QUEUE, {
     connection: createRedisConnection(),
     defaultJobOptions: DEFAULT_BULLMQ_JOB_OPTIONS
   });
 
-  return queue as Queue<DocsIngestionJob>;
+  return queue as Queue<DocsIngestionJob | DocVersionIngestionJob>;
 }
 
 export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
@@ -85,6 +98,48 @@ export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
   const queuedJob = await ingestionQueue.add(DOCS_INGESTION_JOB, jobWithCorrelation, {
     jobId: deterministicJobId
   });
+
+  return {
+    jobId: queuedJob.id?.toString(),
+    correlationId,
+    reused: false
+  };
+}
+
+export async function enqueueDocVersionIngestion(job: DocVersionIngestionJobInput): Promise<{
+  jobId: string | undefined;
+  correlationId: CorrelationId;
+  reused: boolean;
+}> {
+  const ingestionQueue = getQueue();
+  const correlationId =
+    typeof job.correlationId === "string" ? asCorrelationId(job.correlationId) : newCorrelationId();
+  const deterministicJobId = docsVersionIngestionJobId({
+    tenantId: job.tenantId,
+    docId: job.docId,
+    versionId: job.versionId
+  });
+  const existingJob = await ingestionQueue.getJob(deterministicJobId);
+  if (existingJob) {
+    return {
+      jobId: existingJob.id?.toString(),
+      correlationId,
+      reused: true
+    };
+  }
+
+  const queuedJob = await ingestionQueue.add(
+    DOCS_INGESTION_V1_JOB_NAME,
+    {
+      tenantId: job.tenantId,
+      docId: job.docId,
+      versionId: job.versionId,
+      correlationId
+    } satisfies DocVersionIngestionJob,
+    {
+      jobId: deterministicJobId
+    }
+  );
 
   return {
     jobId: queuedJob.id?.toString(),
