@@ -1,3 +1,8 @@
 export { GmailProvider } from "./gmail-provider";
 export { createGmailProvider, mailProviderRegistry } from "./registry";
-export { GmailHistoryExpiredError, NotImplementedError } from "./errors";
+export {
+  DraftOwnershipMismatchError,
+  GmailHistoryExpiredError,
+  MissingRecipientError,
+  NotImplementedError
+} from "./errors";

@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Cursor, MailboxId, MailProviderContext, ThreadId } from "@ai-email/shared";
+import type {
+  CopilotDraftMarker,
+  Cursor,
+  MailboxId,
+  MailProviderContext,
+  MessageId,
+  ThreadId
+} from "@ai-email/shared";
 import { GmailProvider } from "./gmail-provider";
-import { GmailHistoryExpiredError } from "./errors";
+import { GmailHistoryExpiredError, MissingRecipientError } from "./errors";
 
 const context: MailProviderContext<{ accessToken: string; userId: string }> = {
   mailboxId: "mailbox-test" as MailboxId,
@@ -11,6 +18,11 @@ const context: MailProviderContext<{ accessToken: string; userId: string }> = {
     accessToken: "token-test",
     userId: "me"
   }
+};
+
+const marker: CopilotDraftMarker = {
+  draftKey: "tenant-1:mailbox-test:msg-1",
+  version: 1
 };
 
 test("GmailProvider.listChanges paginates, dedupes, sorts, and returns next cursor", async () => {
@@ -65,6 +77,18 @@ test("GmailProvider.listChanges paginates, dedupes, sorts, and returns next curs
       },
       async getThread() {
         return { id: "thread-0", messages: [] };
+      },
+      async listDrafts() {
+        return { drafts: [] };
+      },
+      async getDraft() {
+        return { id: "draft-0", message: { threadId: "thread-0", raw: "" } };
+      },
+      async createDraft() {
+        return { id: "draft-created", message: { threadId: "thread-0" } };
+      },
+      async updateDraft() {
+        return { id: "draft-updated", message: { threadId: "thread-0" } };
       }
     }
   });
@@ -97,6 +121,18 @@ test("GmailProvider.listChanges maps history expired into typed error", async ()
       },
       async getThread() {
         return { id: "thread-0", messages: [] };
+      },
+      async listDrafts() {
+        return { drafts: [] };
+      },
+      async getDraft() {
+        return { id: "draft-0", message: { threadId: "thread-0", raw: "" } };
+      },
+      async createDraft() {
+        return { id: "draft-created", message: { threadId: "thread-0" } };
+      },
+      async updateDraft() {
+        return { id: "draft-updated", message: { threadId: "thread-0" } };
       }
     }
   });
@@ -174,6 +210,18 @@ test("GmailProvider.getThread normalizes ordering, addresses, and body extractio
             }
           ]
         };
+      },
+      async listDrafts() {
+        return { drafts: [] };
+      },
+      async getDraft() {
+        return { id: "draft-0", message: { threadId: "thread-0", raw: "" } };
+      },
+      async createDraft() {
+        return { id: "draft-created", message: { threadId: "thread-0" } };
+      },
+      async updateDraft() {
+        return { id: "draft-updated", message: { threadId: "thread-0" } };
       }
     }
   });
@@ -191,5 +239,223 @@ test("GmailProvider.getThread normalizes ordering, addresses, and body extractio
   assert.deepEqual(
     response.thread.participants.map((participant) => participant.email),
     ["guest@example.com", "guide@example.com", "second@example.com", "ops@example.com"]
+  );
+});
+
+test("GmailProvider.upsertThreadDraft creates draft when marker match is absent", async () => {
+  let createRaw = "";
+  let createThreadId = "";
+  const provider = new GmailProvider({
+    apiClient: {
+      async listHistory() {
+        return { historyId: "0", history: [] };
+      },
+      async getProfile() {
+        return { historyId: "0" };
+      },
+      async getThread() {
+        return {
+          id: "thread-upsert",
+          messages: [
+            {
+              id: "m-1",
+              threadId: "thread-upsert",
+              internalDate: "10",
+              payload: {
+                headers: [
+                  { name: "From", value: "guest@example.com" },
+                  { name: "Subject", value: "Need help" }
+                ]
+              }
+            }
+          ]
+        };
+      },
+      async listDrafts() {
+        return {
+          drafts: [{ id: "draft-other", message: { threadId: "thread-upsert" } }]
+        };
+      },
+      async getDraft() {
+        return {
+          id: "draft-other",
+          message: {
+            threadId: "thread-upsert",
+            raw: Buffer.from("Subject: Re: Need help\r\n\r\nnot ours", "utf8")
+              .toString("base64")
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/g, "")
+          }
+        };
+      },
+      async createDraft(input) {
+        createRaw = input.raw;
+        createThreadId = input.threadId;
+        return { id: "draft-created", message: { threadId: input.threadId } };
+      },
+      async updateDraft() {
+        assert.fail("updateDraft should not be called in create path");
+      }
+    }
+  });
+
+  const result = await provider.upsertThreadDraft(context, {
+    threadId: "thread-upsert" as ThreadId,
+    kind: "copilot_reply",
+    replyToMessageId: "msg-trigger" as MessageId,
+    body: { text: "Draft reply" },
+    marker
+  });
+
+  assert.equal(result.action, "created");
+  assert.equal(createThreadId, "thread-upsert");
+  const decoded = Buffer.from(
+    createRaw.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(createRaw.length / 4) * 4, "="),
+    "base64"
+  ).toString("utf8");
+  assert.match(decoded, /ai-email:draft:v1/);
+  assert.match(decoded, /key=tenant-1:mailbox-test:msg-1/);
+});
+
+test("GmailProvider.upsertThreadDraft updates only matching marker draft", async () => {
+  let updatedDraftId = "";
+  let createCalled = false;
+  const provider = new GmailProvider({
+    apiClient: {
+      async listHistory() {
+        return { historyId: "0", history: [] };
+      },
+      async getProfile() {
+        return { historyId: "0" };
+      },
+      async getThread() {
+        return {
+          id: "thread-upsert",
+          messages: [
+            {
+              id: "m-1",
+              threadId: "thread-upsert",
+              internalDate: "10",
+              payload: {
+                headers: [{ name: "From", value: "guest@example.com" }]
+              }
+            }
+          ]
+        };
+      },
+      async listDrafts() {
+        return {
+          drafts: [
+            { id: "draft-unrelated", message: { threadId: "thread-upsert" } },
+            { id: "draft-owned", message: { threadId: "thread-upsert" } }
+          ]
+        };
+      },
+      async getDraft(input) {
+        if (input.draftId === "draft-unrelated") {
+          return {
+            id: "draft-unrelated",
+            message: {
+              threadId: "thread-upsert",
+              raw: Buffer.from("Subject: Re\r\n\r\nhello", "utf8")
+                .toString("base64")
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=+$/g, "")
+            }
+          };
+        }
+        return {
+          id: "draft-owned",
+          message: {
+            threadId: "thread-upsert",
+            raw: Buffer.from(
+              "<!-- ai-email:draft:v1 key=tenant-1:mailbox-test:msg-1 mailbox=mailbox-test -->\nbody",
+              "utf8"
+            )
+              .toString("base64")
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/g, "")
+          }
+        };
+      },
+      async createDraft() {
+        createCalled = true;
+        return { id: "draft-created", message: { threadId: "thread-upsert" } };
+      },
+      async updateDraft(input) {
+        updatedDraftId = input.draftId;
+        return { id: input.draftId, message: { threadId: input.threadId } };
+      }
+    }
+  });
+
+  const result = await provider.upsertThreadDraft(context, {
+    threadId: "thread-upsert" as ThreadId,
+    kind: "copilot_reply",
+    replyToMessageId: "msg-trigger" as MessageId,
+    body: { text: "Draft reply" },
+    marker
+  });
+
+  assert.equal(createCalled, false);
+  assert.equal(updatedDraftId, "draft-owned");
+  assert.equal(result.action, "updated");
+});
+
+test("GmailProvider.upsertThreadDraft throws MissingRecipientError when no recipient can be derived", async () => {
+  const provider = new GmailProvider({
+    apiClient: {
+      async listHistory() {
+        return { historyId: "0", history: [] };
+      },
+      async getProfile() {
+        return { historyId: "0" };
+      },
+      async getThread() {
+        return {
+          id: "thread-upsert",
+          messages: [
+            {
+              id: "m-1",
+              threadId: "thread-upsert",
+              internalDate: "10",
+              payload: {
+                headers: []
+              }
+            }
+          ]
+        };
+      },
+      async listDrafts() {
+        return { drafts: [] };
+      },
+      async getDraft() {
+        return { id: "draft-0", message: { threadId: "thread-upsert", raw: "" } };
+      },
+      async createDraft() {
+        return { id: "draft-created", message: { threadId: "thread-upsert" } };
+      },
+      async updateDraft() {
+        return { id: "draft-updated", message: { threadId: "thread-upsert" } };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () =>
+      provider.upsertThreadDraft(context, {
+        threadId: "thread-upsert" as ThreadId,
+        kind: "copilot_reply",
+        replyToMessageId: "msg-trigger" as MessageId,
+        body: { text: "Draft reply" },
+        marker
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof MissingRecipientError);
+      return true;
+    }
   );
 });

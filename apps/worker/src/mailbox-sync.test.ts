@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MailChange, MessageId, ThreadId } from "@ai-email/shared";
-import { MemoryCursorStore, syncMailbox, type MailboxSyncProvider } from "./mailbox-sync";
+import {
+  MemoryCursorStore,
+  runDraftUpsertIdempotencyHarness,
+  syncMailbox,
+  type DraftUpsertProvider,
+  type MailboxSyncProvider
+} from "./mailbox-sync";
 
 function createMessageAddedChange(id: string, threadId: string): MailChange {
   return {
@@ -78,4 +84,31 @@ test("syncMailbox commits cursor only when commitCursor=true", async () => {
   });
 
   assert.equal(await cursorStore.get("tenant-1", "mailbox-1"), "220");
+});
+
+test("runDraftUpsertIdempotencyHarness calls provider twice with same idempotency key", async () => {
+  const calls: string[] = [];
+  const provider: DraftUpsertProvider = {
+    async upsertThreadDraft(input) {
+      calls.push(input.idempotencyKey);
+      return {
+        action: calls.length === 1 ? "created" : "updated",
+        draftId: "draft-1" as never
+      };
+    }
+  };
+
+  const result = await runDraftUpsertIdempotencyHarness({
+    provider,
+    mailboxId: "mailbox-1" as never,
+    threadId: "thread-1" as never,
+    replyToMessageId: "msg-1" as never,
+    idempotencyKey: "tenant-1:mailbox-1:msg-1",
+    subject: "Re: Hello",
+    bodyText: "Draft body"
+  });
+
+  assert.deepEqual(calls, ["tenant-1:mailbox-1:msg-1", "tenant-1:mailbox-1:msg-1"]);
+  assert.equal(result.first.action, "created");
+  assert.equal(result.second.action, "updated");
 });

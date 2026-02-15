@@ -1,4 +1,13 @@
-import type { Cursor, MailChange, NormalizedThread } from "@ai-email/shared";
+import type {
+  Cursor,
+  MailBody,
+  MailChange,
+  MailboxId,
+  MessageId,
+  NormalizedThread,
+  ThreadId,
+  UpsertThreadDraftResponse
+} from "@ai-email/shared";
 import { GmailHistoryExpiredError } from "../../../packages/mail-gmail/src/errors.js";
 
 export interface MailboxCursorStore {
@@ -23,6 +32,17 @@ export type NormalizedThreadFetcher = (input: {
   mailboxId: string;
   threadId: string;
 }) => Promise<NormalizedThread>;
+
+export type DraftUpsertProvider = {
+  upsertThreadDraft(input: {
+    mailboxId: MailboxId;
+    threadId: ThreadId;
+    replyToMessageId: MessageId;
+    subject?: string;
+    body: MailBody;
+    idempotencyKey: string;
+  }): Promise<UpsertThreadDraftResponse>;
+};
 
 export class MemoryCursorStore implements MailboxCursorStore {
   private readonly entries = new Map<string, string>();
@@ -162,4 +182,31 @@ export async function collectThreadContextsForChanges(input: {
       })
     )
   );
+}
+
+export async function runDraftUpsertIdempotencyHarness(input: {
+  provider: DraftUpsertProvider;
+  mailboxId: MailboxId;
+  threadId: ThreadId;
+  replyToMessageId: MessageId;
+  idempotencyKey: string;
+  subject?: string;
+  bodyText: string;
+}): Promise<{
+  first: UpsertThreadDraftResponse;
+  second: UpsertThreadDraftResponse;
+}> {
+  const request = {
+    mailboxId: input.mailboxId,
+    threadId: input.threadId,
+    replyToMessageId: input.replyToMessageId,
+    idempotencyKey: input.idempotencyKey,
+    subject: input.subject,
+    body: {
+      text: input.bodyText
+    }
+  };
+  const first = await input.provider.upsertThreadDraft(request);
+  const second = await input.provider.upsertThreadDraft(request);
+  return { first, second };
 }

@@ -1,5 +1,6 @@
 import type {
   Cursor,
+  DraftId,
   EnsureLabelRequest,
   EnsureLabelResponse,
   GetThreadRequest,
@@ -18,7 +19,12 @@ import type {
   UpsertThreadDraftRequest,
   UpsertThreadDraftResponse
 } from "@ai-email/shared";
-import { GmailHistoryExpiredError, NotImplementedError } from "./errors";
+import {
+  DraftOwnershipMismatchError,
+  GmailHistoryExpiredError,
+  MissingRecipientError,
+  NotImplementedError
+} from "./errors";
 
 type GmailHistoryType = "messageAdded" | "labelAdded" | "labelRemoved";
 
@@ -67,6 +73,24 @@ type GmailProfileResponse = {
   historyId?: string;
 };
 
+type GmailDraftListResponse = {
+  drafts?: Array<{
+    id?: string;
+    message?: {
+      threadId?: string;
+    };
+  }>;
+};
+
+type GmailDraftResponse = {
+  id?: string;
+  message?: {
+    id?: string;
+    threadId?: string;
+    raw?: string;
+  };
+};
+
 type GmailApiClient = {
   listHistory(input: {
     accessToken: string;
@@ -86,6 +110,29 @@ type GmailApiClient = {
     userId: string;
     threadId: string;
   }): Promise<GmailThreadResponse>;
+  listDrafts(input: {
+    accessToken: string;
+    userId: string;
+    maxResults?: number;
+  }): Promise<GmailDraftListResponse>;
+  getDraft(input: {
+    accessToken: string;
+    userId: string;
+    draftId: string;
+  }): Promise<GmailDraftResponse>;
+  createDraft(input: {
+    accessToken: string;
+    userId: string;
+    threadId: string;
+    raw: string;
+  }): Promise<GmailDraftResponse>;
+  updateDraft(input: {
+    accessToken: string;
+    userId: string;
+    draftId: string;
+    threadId: string;
+    raw: string;
+  }): Promise<GmailDraftResponse>;
 };
 
 type GmailAuth = {
@@ -108,6 +155,7 @@ const DEFAULT_LABEL_ID = "INBOX";
 const DEFAULT_USER_ID = "me";
 const MAX_RESULTS_PER_PAGE = 500;
 const MAX_BODY_TEXT_CHARS = 8000;
+const MAX_DRAFT_SCAN_RESULTS = 50;
 
 const gmailApiClient: GmailApiClient = {
   async listHistory(input) {
@@ -174,6 +222,90 @@ const gmailApiClient: GmailApiClient = {
       throw error;
     }
     return parseJsonResponse<GmailThreadResponse>(bodyText);
+  },
+  async listDrafts(input) {
+    const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/drafts`);
+    url.searchParams.set("maxResults", String(input.maxResults ?? MAX_DRAFT_SCAN_RESULTS));
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`
+      }
+    });
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail drafts.list failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailDraftListResponse>(bodyText);
+  },
+  async getDraft(input) {
+    const url = new URL(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/drafts/${encodeURIComponent(input.draftId)}`
+    );
+    url.searchParams.set("format", "raw");
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`
+      }
+    });
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail drafts.get failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailDraftResponse>(bodyText);
+  },
+  async createDraft(input) {
+    const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/drafts`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        message: {
+          threadId: input.threadId,
+          raw: input.raw
+        }
+      })
+    });
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail drafts.create failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailDraftResponse>(bodyText);
+  },
+  async updateDraft(input) {
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(input.userId)}/drafts/${encodeURIComponent(input.draftId)}`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${input.accessToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          id: input.draftId,
+          message: {
+            threadId: input.threadId,
+            raw: input.raw
+          }
+        })
+      }
+    );
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`Gmail drafts.update failed with status ${response.status}: ${bodyText}`);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+    return parseJsonResponse<GmailDraftResponse>(bodyText);
   }
 };
 
@@ -229,6 +361,14 @@ function decodeBase64Url(input: string): string {
   return Buffer.from(padded, "base64").toString("utf8");
 }
 
+function encodeBase64Url(input: string): string {
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
 function normalizeWhitespace(input: string): string {
   return input
     .replace(/\r\n?/g, "\n")
@@ -236,6 +376,38 @@ function normalizeWhitespace(input: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function buildDraftMarker(input: {
+  idempotencyKey: string;
+  mailboxId: string;
+  tenantId?: string;
+}): string {
+  const tokens = [`ai-email:draft:v1`, `key=${input.idempotencyKey}`, `mailbox=${input.mailboxId}`];
+  if (input.tenantId) {
+    tokens.push(`tenant=${input.tenantId}`);
+  }
+  return `<!-- ${tokens.join(" ")} -->`;
+}
+
+function parseDraftMarker(content: string | undefined): { key?: string; mailbox?: string; tenant?: string } {
+  if (!content) {
+    return {};
+  }
+  const markerMatch = content.match(/ai-email:draft:v1[\s\S]*?-->/i);
+  if (!markerMatch) {
+    return {};
+  }
+  const text = markerMatch[0];
+  const readToken = (name: string) => {
+    const match = text.match(new RegExp(`${name}\\s*=\\s*([^\\s>]+)`, "i"));
+    return match?.[1];
+  };
+  return {
+    key: readToken("key"),
+    mailbox: readToken("mailbox"),
+    tenant: readToken("tenant")
+  };
 }
 
 function stripHtmlTags(input: string): string {
@@ -388,6 +560,71 @@ function normalizeMessage(input: GmailApiMessage): NormalizedMessage | null {
     bodyText: body.bodyText,
     bodyTextTruncated: body.bodyTextTruncated
   };
+}
+
+function formatAddress(address: NormalizedAddress): string {
+  if (address.name && address.name.trim().length > 0) {
+    return `${address.name} <${address.email}>`;
+  }
+  return address.email;
+}
+
+function escapeHeaderValue(value: string): string {
+  return value.replace(/\r?\n/g, " ").trim();
+}
+
+function deriveRecipientFromThread(thread: NormalizedThread): NormalizedAddress | null {
+  const latest = thread.messages[thread.messages.length - 1];
+  if (latest?.from?.email) {
+    return latest.from;
+  }
+  for (const participant of thread.participants) {
+    if (participant.email) {
+      return participant;
+    }
+  }
+  return null;
+}
+
+function buildRfc822Raw(input: {
+  to: NormalizedAddress;
+  cc: NormalizedAddress[];
+  subject: string;
+  marker: string;
+  bodyText: string;
+  replyToMessageId?: string;
+}): string {
+  const headers: string[] = [];
+  headers.push(`To: ${escapeHeaderValue(formatAddress(input.to))}`);
+  if (input.cc.length > 0) {
+    headers.push(`Cc: ${escapeHeaderValue(input.cc.map((entry) => formatAddress(entry)).join(", "))}`);
+  }
+  headers.push(`Subject: ${escapeHeaderValue(input.subject)}`);
+  if (input.replyToMessageId && input.replyToMessageId.trim().length > 0) {
+    headers.push(`In-Reply-To: ${escapeHeaderValue(input.replyToMessageId)}`);
+    headers.push(`References: ${escapeHeaderValue(input.replyToMessageId)}`);
+  }
+  headers.push("Content-Type: text/plain; charset=UTF-8");
+  headers.push("MIME-Version: 1.0");
+
+  const body = normalizeWhitespace(`${input.marker}\n\n${input.bodyText}`);
+  return encodeBase64Url(`${headers.join("\r\n")}\r\n\r\n${body}\r\n`);
+}
+
+function extractRawBody(raw: string | undefined): string {
+  if (!raw) {
+    return "";
+  }
+  const decoded = decodeBase64Url(raw);
+  const splitIndex = decoded.indexOf("\r\n\r\n");
+  if (splitIndex >= 0) {
+    return decoded.slice(splitIndex + 4);
+  }
+  const lfIndex = decoded.indexOf("\n\n");
+  if (lfIndex >= 0) {
+    return decoded.slice(lfIndex + 2);
+  }
+  return decoded;
 }
 
 const notImplemented = (method: string): never => {
@@ -572,9 +809,90 @@ export class GmailProvider implements MailProvider {
   }
 
   async upsertThreadDraft(
-    _context: MailProviderContext,
-    _req: UpsertThreadDraftRequest
+    context: MailProviderContext,
+    req: UpsertThreadDraftRequest
   ): Promise<UpsertThreadDraftResponse> {
-    return notImplemented("upsertThreadDraft");
+    const auth = toAuth(context);
+    const userId = auth.userId ?? DEFAULT_USER_ID;
+    const threadId = String(req.threadId);
+    const tenantId = typeof (context.auth as { tenantId?: unknown })?.tenantId === "string"
+      ? ((context.auth as { tenantId?: string }).tenantId ?? undefined)
+      : undefined;
+
+    const threadResult = await this.getThread(context, { threadId: req.threadId, includeBody: true });
+    const recipient = deriveRecipientFromThread(threadResult.thread);
+    if (!recipient) {
+      throw new MissingRecipientError({ threadId });
+    }
+
+    const latestMessage = threadResult.thread.messages[threadResult.thread.messages.length - 1];
+    const marker = buildDraftMarker({
+      idempotencyKey: req.marker.draftKey,
+      mailboxId: String(context.mailboxId),
+      tenantId
+    });
+    const subjectBase = req.subject?.trim() || threadResult.thread.subject?.trim() || "Re:";
+    const subject = /^re:/i.test(subjectBase) ? subjectBase : `Re: ${subjectBase}`;
+    const raw = buildRfc822Raw({
+      to: recipient,
+      cc: latestMessage?.cc ?? [],
+      subject,
+      marker,
+      bodyText: req.body.text,
+      replyToMessageId: String(req.replyToMessageId)
+    });
+
+    const listResponse = await this.apiClient.listDrafts({
+      accessToken: auth.accessToken,
+      userId,
+      maxResults: MAX_DRAFT_SCAN_RESULTS
+    });
+    const threadDrafts = (listResponse.drafts ?? []).filter(
+      (draft) => draft.message?.threadId === threadId && typeof draft.id === "string"
+    );
+
+    for (const draft of threadDrafts) {
+      const draftId = String(draft.id);
+      const draftDetail = await this.apiClient.getDraft({
+        accessToken: auth.accessToken,
+        userId,
+        draftId
+      });
+      const parsedMarker = parseDraftMarker(extractRawBody(draftDetail.message?.raw));
+      if (!parsedMarker.key) {
+        continue;
+      }
+      if (parsedMarker.key !== req.marker.draftKey) {
+        continue;
+      }
+      if (parsedMarker.mailbox && parsedMarker.mailbox !== String(context.mailboxId)) {
+        throw new DraftOwnershipMismatchError({ draftId });
+      }
+      const updateResponse = await this.apiClient.updateDraft({
+        accessToken: auth.accessToken,
+        userId,
+        draftId,
+        threadId,
+        raw
+      });
+      return {
+        action: "updated",
+        draftId: (updateResponse.id || draftId) as DraftId
+      };
+    }
+
+    const createResponse = await this.apiClient.createDraft({
+      accessToken: auth.accessToken,
+      userId,
+      threadId,
+      raw
+    });
+    if (!createResponse.id) {
+      throw new Error("Gmail drafts.create did not return draft id");
+    }
+    return {
+      action: "created",
+      draftId: String(createResponse.id) as DraftId
+    };
   }
 }
