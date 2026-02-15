@@ -8,6 +8,7 @@ import {
   type GetThreadRequest,
   type Cursor,
   DEFAULT_JOB_ATTEMPTS,
+  DOCS_INDEXING_V1_JOB_NAME,
   DOCS_INGESTION_V1_JOB_NAME,
   ErrorClass,
   type LabelId,
@@ -26,12 +27,15 @@ import {
   isGlobalDocsIngestionDisabled,
   isGlobalMailboxSyncDisabled,
   isGlobalMailNotificationsDisabled,
+  docsVersionIndexingJobId,
   type CorrelationId
 } from "@ai-email/shared";
 import { toLogError, toStructuredLogContext, toStructuredLogEvent } from "./logging.js";
 import { buildExtractedMetadataKey, buildExtractedTextKey } from "./docs/keys.js";
 import { downloadDocObject, uploadTextArtifact } from "./docs/s3.js";
 import { extractText } from "./docs/extract.js";
+import { buildDeterministicChunks, type ChunkRow } from "./docs/chunk.js";
+import { embedTexts } from "./docs/embeddings.js";
 import {
   syncMailbox,
   type MailboxCursorStore,
@@ -71,6 +75,13 @@ type DocsIngestionJob = {
 };
 
 type DocVersionIngestionJob = {
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  correlationId: CorrelationId;
+};
+
+type DocVersionIndexingJob = {
   tenantId: string;
   docId: string;
   versionId: string;
@@ -144,6 +155,9 @@ if (!process.env.REDIS_URL) {
 const redisConnection = new IORedis(process.env.REDIS_URL, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false
+});
+const docsIngestionQueue = new Queue<DocVersionIngestionJob | DocVersionIndexingJob>(docsQueueName, {
+  connection: redisConnection
 });
 
 const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -731,9 +745,12 @@ type DocVersionRow = {
 type IngestionErrorCode =
   | "DOC_VERSION_NOT_FOUND"
   | "RAW_FILE_KEY_MISSING"
+  | "EXTRACTED_TEXT_KEY_MISSING"
   | "FILE_TOO_LARGE"
   | "S3_GET_FAILED"
   | "S3_PUT_FAILED"
+  | "EMBEDDING_FAILED"
+  | "INDEXING_FAILED"
   | "UNSUPPORTED_TYPE"
   | "EXTRACT_FAILED"
   | "DB_UPDATE_FAILED";
@@ -894,6 +911,95 @@ async function markDocVersionSuccess(
   });
 }
 
+async function markDocVersionActiveAfterIndexing(
+  tenantId: string,
+  docId: string,
+  versionId: string
+): Promise<void> {
+  await withTenantClient(tenantId, async (client) => {
+    await client.query(
+      `
+        UPDATE doc_versions
+        SET
+          state = 'ARCHIVED',
+          archived_at = now(),
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id <> $3
+          AND state = 'ACTIVE'
+      `,
+      [tenantId, docId, versionId]
+    );
+
+    await client.query(
+      `
+        UPDATE doc_versions
+        SET
+          state = 'ACTIVE',
+          activated_at = now(),
+          archived_at = NULL,
+          error_code = NULL,
+          error_message = NULL,
+          updated_at = now()
+        WHERE tenant_id = $1
+          AND doc_id = $2
+          AND id = $3
+      `,
+      [tenantId, docId, versionId]
+    );
+  });
+}
+
+async function replaceDocChunksForVersion(input: {
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  chunks: Array<ChunkRow & { embedding: number[] }>;
+}): Promise<void> {
+  await withTenantClient(input.tenantId, async (client) => {
+    await client.query(
+      `
+        DELETE FROM doc_chunks
+        WHERE tenant_id = $1
+          AND version_id = $2
+      `,
+      [input.tenantId, input.versionId]
+    );
+
+    for (const chunk of input.chunks) {
+      const embeddingValue = `[${chunk.embedding.join(",")}]`;
+      await client.query(
+        `
+          INSERT INTO doc_chunks (
+            tenant_id,
+            doc_id,
+            version_id,
+            chunk_index,
+            start_char,
+            end_char,
+            content,
+            content_sha256,
+            embedding
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector)
+        `,
+        [
+          input.tenantId,
+          input.docId,
+          input.versionId,
+          chunk.chunkIndex,
+          chunk.startChar,
+          chunk.endChar,
+          chunk.content,
+          chunk.contentSha256,
+          embeddingValue
+        ]
+      );
+    }
+  });
+}
+
 async function markDocVersionError(
   tenantId: string,
   docId: string,
@@ -937,6 +1043,45 @@ function toVersionIngestionError(error: unknown): {
     };
   }
   return { code: "EXTRACT_FAILED", message };
+}
+
+async function enqueueDocVersionIndexingJob(input: {
+  queue: Queue<DocVersionIngestionJob | DocVersionIndexingJob>;
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  correlationId: CorrelationId;
+}): Promise<{ jobId: string | undefined; reused: boolean }> {
+  const deterministicJobId = docsVersionIndexingJobId({
+    tenantId: input.tenantId,
+    docId: input.docId,
+    versionId: input.versionId
+  });
+  const existing = await input.queue.getJob(deterministicJobId);
+  if (existing) {
+    return {
+      jobId: existing.id?.toString(),
+      reused: true
+    };
+  }
+
+  const enqueued = await input.queue.add(
+    DOCS_INDEXING_V1_JOB_NAME,
+    {
+      tenantId: input.tenantId,
+      docId: input.docId,
+      versionId: input.versionId,
+      correlationId: input.correlationId
+    } satisfies DocVersionIndexingJob,
+    {
+      jobId: deterministicJobId
+    }
+  );
+
+  return {
+    jobId: enqueued.id?.toString(),
+    reused: false
+  };
 }
 
 async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): Promise<void> {
@@ -1067,6 +1212,17 @@ async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): P
       throw new DocIngestionError("DB_UPDATE_FAILED", message);
     });
 
+    const indexingJob = await enqueueDocVersionIndexingJob({
+      queue: docsIngestionQueue,
+      tenantId,
+      docId,
+      versionId,
+      correlationId
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("DB_UPDATE_FAILED", `Failed to enqueue doc index job: ${message}`);
+    });
+
     // eslint-disable-next-line no-console
     console.log(
       JSON.stringify(
@@ -1080,7 +1236,9 @@ async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): P
           docId,
           versionId,
           parser: extracted.meta.parser,
-          extractedCharCount: extracted.meta.charCount
+          extractedCharCount: extracted.meta.charCount,
+          indexJobId: indexingJob.jobId ?? null,
+          indexJobReused: indexingJob.reused
         }
       )
     );
@@ -1117,9 +1275,162 @@ async function processDocVersionIngestionV1(job: Job<DocVersionIngestionJob>): P
   }
 }
 
-const ingestionWorker = new Worker<DocsIngestionJob | DocVersionIngestionJob>(
+function toVersionIndexingError(error: unknown): { code: IngestionErrorCode; message: string } {
+  if (error instanceof DocIngestionError) {
+    return { code: error.code, message: error.message };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("EMBEDDING_FAILED")) {
+    return {
+      code: "EMBEDDING_FAILED",
+      message
+    };
+  }
+  return {
+    code: "INDEXING_FAILED",
+    message
+  };
+}
+
+async function processDocVersionIndexingV1(job: Job<DocVersionIndexingJob>): Promise<void> {
+  const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
+  const { tenantId, docId, versionId, correlationId } = job.data;
+  const attempt = job.attemptsMade + 1;
+  const maxAttempts = job.opts.attempts ?? DEFAULT_JOB_ATTEMPTS;
+  const baseLogContext = toStructuredLogContext({
+    tenantId,
+    provider: "other",
+    stage: "doc_indexing",
+    queueName: job.queueName,
+    jobId: job.id?.toString(),
+    correlationId
+  });
+
+  // eslint-disable-next-line no-console
+  console.log(
+    JSON.stringify({
+      ...toStructuredLogEvent(baseLogContext, "job.start", {
+        startedAt: startedAtIso,
+        attempt,
+        maxAttempts
+      }),
+      docId,
+      versionId
+    })
+  );
+
+  try {
+    const version = await getDocVersionForIngestion(tenantId, docId, versionId);
+    if (!version) {
+      throw new DocIngestionError(
+        "DOC_VERSION_NOT_FOUND",
+        `Doc version not found tenantId=${tenantId} docId=${docId} versionId=${versionId}`
+      );
+    }
+    if (!version.extracted_text_key) {
+      throw new DocIngestionError(
+        "EXTRACTED_TEXT_KEY_MISSING",
+        `extracted_text_key missing tenantId=${tenantId} docId=${docId} versionId=${versionId}`
+      );
+    }
+
+    await markDocVersionProcessing(tenantId, docId, versionId);
+
+    const extractedObject = await downloadDocObject({ key: version.extracted_text_key }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "FILE_TOO_LARGE") {
+        throw new DocIngestionError("FILE_TOO_LARGE", "Extracted text exceeds max indexing size");
+      }
+      throw new DocIngestionError("S3_GET_FAILED", message);
+    });
+
+    const extractedText = extractedObject.body.toString("utf8");
+    const chunks = buildDeterministicChunks(extractedText);
+
+    const embeddings = await embedTexts({
+      texts: chunks.map((chunk) => chunk.content)
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("EMBEDDING_FAILED", message);
+    });
+
+    if (embeddings.vectors.length !== chunks.length) {
+      throw new DocIngestionError(
+        "EMBEDDING_FAILED",
+        `Embedding count mismatch: expected ${chunks.length}, got ${embeddings.vectors.length}`
+      );
+    }
+
+    await replaceDocChunksForVersion({
+      tenantId,
+      docId,
+      versionId,
+      chunks: chunks.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddings.vectors[index]
+      }))
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("DB_UPDATE_FAILED", message);
+    });
+
+    await markDocVersionActiveAfterIndexing(tenantId, docId, versionId).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DocIngestionError("DB_UPDATE_FAILED", message);
+    });
+
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify({
+        ...toStructuredLogEvent(baseLogContext, "job.done", {
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt,
+          attempt,
+          maxAttempts
+        }),
+        docId,
+        versionId,
+        chunkCount: chunks.length,
+        embeddingModel: embeddings.model
+      })
+    );
+  } catch (error) {
+    const normalized = toVersionIndexingError(error);
+    if (normalized.code !== "DOC_VERSION_NOT_FOUND") {
+      await markDocVersionError(tenantId, docId, versionId, normalized);
+    }
+    const structuredError = toLogError(error);
+
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify({
+        ...toStructuredLogEvent(baseLogContext, "job.error", {
+          startedAt: startedAtIso,
+          elapsedMs: Date.now() - startedAt,
+          attempt,
+          maxAttempts,
+          errorCode: normalized.code,
+          errorMessage: normalized.message,
+          errorStack: truncateText(toSafeStack(structuredError.stack), 4000)
+        }),
+        docId,
+        versionId
+      })
+    );
+
+    throw new UnrecoverableError(normalized.message);
+  }
+}
+
+const ingestionWorker = new Worker<DocsIngestionJob | DocVersionIngestionJob | DocVersionIndexingJob>(
   docsQueueName,
   async (job) => {
+    if (job.name === DOCS_INDEXING_V1_JOB_NAME) {
+      await processDocVersionIndexingV1(job as Job<DocVersionIndexingJob>);
+      return;
+    }
     if (job.name === DOCS_INGESTION_V1_JOB_NAME) {
       await processDocVersionIngestionV1(job as Job<DocVersionIngestionJob>);
       return;

@@ -38,6 +38,20 @@ export interface DocVersion {
   archivedAt: string | null;
 }
 
+export interface DocChunk {
+  id: string;
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  chunkIndex: number;
+  startChar: number;
+  endChar: number;
+  content: string;
+  contentSha256: string;
+  embedding: number[];
+  createdAt: string;
+}
+
 export function isDocVersionState(value: unknown): value is DocVersionState {
   return typeof value === "string" && DOC_VERSION_STATES.includes(value as DocVersionState);
 }

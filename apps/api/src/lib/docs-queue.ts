@@ -2,8 +2,10 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import {
   DEFAULT_BULLMQ_JOB_OPTIONS,
+  DOCS_INDEXING_V1_JOB_NAME,
   DOCS_INGESTION_V1_JOB_NAME,
   asCorrelationId,
+  docsVersionIndexingJobId,
   docsIngestionJobId,
   docsVersionIngestionJobId,
   newCorrelationId,
@@ -13,7 +15,7 @@ import {
 const DOCS_INGESTION_QUEUE = "docs_ingestion";
 const DOCS_INGESTION_JOB = "docs.ingest";
 
-let queue: Queue<DocsIngestionJob | DocVersionIngestionJob> | null = null;
+let queue: Queue<DocsIngestionJob | DocVersionIngestionJob | DocVersionIndexingJob> | null = null;
 
 export type DocsIngestionJob = {
   tenantId: string;
@@ -46,6 +48,17 @@ export type DocVersionIngestionJobInput = Omit<DocVersionIngestionJob, "correlat
   correlationId?: CorrelationId | string;
 };
 
+export type DocVersionIndexingJob = {
+  tenantId: string;
+  docId: string;
+  versionId: string;
+  correlationId: CorrelationId;
+};
+
+export type DocVersionIndexingJobInput = Omit<DocVersionIndexingJob, "correlationId"> & {
+  correlationId?: CorrelationId | string;
+};
+
 function createRedisConnection(): IORedis {
   const redisUrl = process.env.REDIS_URL;
 
@@ -59,17 +72,17 @@ function createRedisConnection(): IORedis {
   });
 }
 
-function getQueue(): Queue<DocsIngestionJob | DocVersionIngestionJob> {
+function getQueue(): Queue<DocsIngestionJob | DocVersionIngestionJob | DocVersionIndexingJob> {
   if (queue) {
     return queue;
   }
 
-  queue = new Queue<DocsIngestionJob | DocVersionIngestionJob>(DOCS_INGESTION_QUEUE, {
+  queue = new Queue<DocsIngestionJob | DocVersionIngestionJob | DocVersionIndexingJob>(DOCS_INGESTION_QUEUE, {
     connection: createRedisConnection(),
     defaultJobOptions: DEFAULT_BULLMQ_JOB_OPTIONS
   });
 
-  return queue as Queue<DocsIngestionJob | DocVersionIngestionJob>;
+  return queue as Queue<DocsIngestionJob | DocVersionIngestionJob | DocVersionIndexingJob>;
 }
 
 export async function enqueueDocIngestion(job: DocsIngestionJobInput): Promise<{
@@ -136,6 +149,48 @@ export async function enqueueDocVersionIngestion(job: DocVersionIngestionJobInpu
       versionId: job.versionId,
       correlationId
     } satisfies DocVersionIngestionJob,
+    {
+      jobId: deterministicJobId
+    }
+  );
+
+  return {
+    jobId: queuedJob.id?.toString(),
+    correlationId,
+    reused: false
+  };
+}
+
+export async function enqueueDocVersionIndexing(job: DocVersionIndexingJobInput): Promise<{
+  jobId: string | undefined;
+  correlationId: CorrelationId;
+  reused: boolean;
+}> {
+  const ingestionQueue = getQueue();
+  const correlationId =
+    typeof job.correlationId === "string" ? asCorrelationId(job.correlationId) : newCorrelationId();
+  const deterministicJobId = docsVersionIndexingJobId({
+    tenantId: job.tenantId,
+    docId: job.docId,
+    versionId: job.versionId
+  });
+  const existingJob = await ingestionQueue.getJob(deterministicJobId);
+  if (existingJob) {
+    return {
+      jobId: existingJob.id?.toString(),
+      correlationId,
+      reused: true
+    };
+  }
+
+  const queuedJob = await ingestionQueue.add(
+    DOCS_INDEXING_V1_JOB_NAME,
+    {
+      tenantId: job.tenantId,
+      docId: job.docId,
+      versionId: job.versionId,
+      correlationId
+    } satisfies DocVersionIndexingJob,
     {
       jobId: deterministicJobId
     }

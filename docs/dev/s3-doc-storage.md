@@ -25,6 +25,22 @@ Worker job `doc.ingest.v1` reads `doc_versions.raw_file_key`, extracts determini
 
 `doc_versions.extracted_text_key` stores the `text.txt` key.
 
+## Indexing Artifacts (Step 13.4)
+Worker job `doc.index.v1` reads `doc_versions.extracted_text_key`, chunks deterministically, embeds via OpenAI embeddings API, and stores vectors in Postgres `doc_chunks`.
+
+Chunking defaults:
+- Approx target size: 800 tokens (`~3200` chars)
+- Overlap: 100 tokens (`~400` chars)
+- Prefer paragraph boundaries; fallback to fixed char windows
+
+Each row in `doc_chunks` stores provenance:
+- `tenant_id`, `doc_id`, `version_id`, `chunk_index`
+- `start_char`, `end_char`
+- `content_sha256`
+- `embedding` (`vector(1536)`)
+
+On successful indexing, `doc_versions.state` is promoted to `ACTIVE` and prior active version(s) for the same doc are archived.
+
 Supported v1 types:
 - PDF
 - DOCX
@@ -42,6 +58,17 @@ TENANT_ID="<tenant-uuid>" \
 DOC_ID="<doc-uuid>" \
 VERSION_ID="<version-uuid>" \
 pnpm -w doc:ingest:enqueue
+```
+
+### Enqueue Indexing (Dev/Stage)
+Use the minimal enqueue script:
+
+```bash
+REDIS_URL="redis://127.0.0.1:6379" \
+TENANT_ID="<tenant-uuid>" \
+DOC_ID="<doc-uuid>" \
+VERSION_ID="<version-uuid>" \
+pnpm -w doc:index:enqueue
 ```
 
 ## Tenant Isolation
