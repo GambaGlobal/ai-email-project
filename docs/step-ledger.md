@@ -119,3 +119,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 10.9.13 | 2026-02-15 | SELF | Added deterministic CI proof checklist for CI / smoke-gate required check + failure artifact retrieval. | Evidence: `pnpm -w repo:check`; proof is executed in GitHub UI during PR; docs include exact navigation. |
 | 10.10.1 | 2026-02-15 | SELF | Phase 10 closeout v1 + evidence gate + Phase 11 entry criteria. | Evidence: `pnpm -w repo:check`. |
 | 11.1 | 2026-02-15 | SELF | Added Phase 11 v1 data map + data classification baseline for sales/security review and engineering minimization guardrails. | Evidence: `pnpm -w repo:check`. |
+| 11.2 | 2026-02-15 | SELF | Added Phase 11 v1 tenant isolation requirements spec across DB, storage, queue, observability, admin, and provider boundaries. | Evidence: `pnpm -w repo:check`. |
