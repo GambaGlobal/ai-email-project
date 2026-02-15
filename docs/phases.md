@@ -21,7 +21,7 @@ If this file conflicts with another roadmap reference, this file wins.
 | 9 | Operator Setup & Minimal Admin UX | Admin onboarding, Gmail connect flow, and docs setup surfaced for operators. | Complete | [`./decisions/0009-phase-9-operator-setup-min-admin-ux.md`](./decisions/0009-phase-9-operator-setup-min-admin-ux.md), [`./phases/phase-9-operator-setup/phase-9-closeout.md`](./phases/phase-9-operator-setup/phase-9-closeout.md), commit `608286ae718fb49bbfef6a24bec874e9835f37ee` ([link](https://github.com/GambaGlobal/ai-email-project/commit/608286ae718fb49bbfef6a24bec874e9835f37ee)) | Real-mode behavior is env-gated where documented. |
 | 10 | Reliability & Observability | Queue reliability contracts and deterministic operator runbook workflows were implemented/frozen. | Complete | [`./decisions/0011-phase-10-reliability-observability-v1-freeze.md`](./decisions/0011-phase-10-reliability-observability-v1-freeze.md), [`./phases/phase-10-reliability-observability/phase-10-closeout-v1.md`](./phases/phase-10-reliability-observability/phase-10-closeout-v1.md), commit `18b17fae9419ecbb789cc8cbc9dbe6d48236efc8` ([link](https://github.com/GambaGlobal/ai-email-project/commit/18b17fae9419ecbb789cc8cbc9dbe6d48236efc8)) | Includes CI smoke-gate policy and command-first ops controls. |
 | 11 | Security, Privacy & Data Retention | Trust posture and retention/deletion boundaries were frozen for operator/security review. | Complete | [`./decisions/0012-phase-11-security-privacy-data-retention.md`](./decisions/0012-phase-11-security-privacy-data-retention.md), [`./phases/phase-11-security/phase-11-closeout.md`](./phases/phase-11-security/phase-11-closeout.md), commit `410daef9211b752ec6769455d722b5514e98aa36` ([link](https://github.com/GambaGlobal/ai-email-project/commit/410daef9211b752ec6769455d722b5514e98aa36)) | Frozen policy layer; implementation hardening continues in subsequent phases. |
-| 12 | Product Engine Completion | Complete the production-grade drafting engine with exactly-once, DLQ/replay, and safe fallback operations. | In Progress | [`./decisions/0013-phase-12-rebaseline-product-engine.md`](./decisions/0013-phase-12-rebaseline-product-engine.md), [`./step-ledger.md`](./step-ledger.md) | Rebaseline phase started in Step 12.1. |
+| 12 | Product Engine Completion | Complete the production-grade drafting engine with exactly-once, DLQ/replay, and safe fallback operations. | Complete | [`./decisions/0013-phase-12-rebaseline-product-engine.md`](./decisions/0013-phase-12-rebaseline-product-engine.md), [`./phases/phase-12-product-engine/phase-12-closeout.md`](./phases/phase-12-product-engine/phase-12-closeout.md), commits `95de301906eb619e912508abbdae3cd7e32dc0d2` ([link](https://github.com/GambaGlobal/ai-email-project/commit/95de301906eb619e912508abbdae3cd7e32dc0d2)), `43abd3074a595ce9cac76a7f95b61c2b737597f1` ([link](https://github.com/GambaGlobal/ai-email-project/commit/43abd3074a595ce9cac76a7f95b61c2b737597f1)), `6c312b16ae8a4af8c9d4596c72be7d514356268c` ([link](https://github.com/GambaGlobal/ai-email-project/commit/6c312b16ae8a4af8c9d4596c72be7d514356268c)), `cbcfbf8a3ce329aab57e8dc6aadf754303201dc0` ([link](https://github.com/GambaGlobal/ai-email-project/commit/cbcfbf8a3ce329aab57e8dc6aadf754303201dc0)), `112a7b017a642cb4729d54906998caa4a7bdb92b` ([link](https://github.com/GambaGlobal/ai-email-project/commit/112a7b017a642cb4729d54906998caa4a7bdb92b)) | Closeout artifacts and evidence gate published in Step 12.9. |
 
 ## Reality Baseline (as of 2026-02-15)
 - Monorepo scaffold exists (workspace + turbo baseline): [`../pnpm-workspace.yaml`](../pnpm-workspace.yaml), [`../turbo.json`](../turbo.json). Commit `a83c4c972f521409861ff220da1779b90123a2ff` ([link](https://github.com/GambaGlobal/ai-email-project/commit/a83c4c972f521409861ff220da1779b90123a2ff)).
@@ -31,22 +31,6 @@ If this file conflicts with another roadmap reference, this file wins.
 - Mail notification receipt dedupe + mailbox sync coalescing state is implemented: [`../packages/db/migrations/010_mail_notification_receipts.js`](../packages/db/migrations/010_mail_notification_receipts.js), [`../packages/db/migrations/012_mailbox_sync_state.js`](../packages/db/migrations/012_mailbox_sync_state.js), [`../apps/api/src/routes/gmail-notifications.ts`](../apps/api/src/routes/gmail-notifications.ts). Commits `0a32bb7d72d27625145db98138b8e440dad35d4d` ([link](https://github.com/GambaGlobal/ai-email-project/commit/0a32bb7d72d27625145db98138b8e440dad35d4d)), `3c709f78cd5595894e6ae401801d10d3a9c8e332` ([link](https://github.com/GambaGlobal/ai-email-project/commit/3c709f78cd5595894e6ae401801d10d3a9c8e332)).
 - Phase closeout docs exist for completed delivery phases: [`./phases/phase-2-closeout.md`](./phases/phase-2-closeout.md), [`./phases/phase-9-operator-setup/phase-9-closeout.md`](./phases/phase-9-operator-setup/phase-9-closeout.md), [`./phases/phase-10-reliability-observability/phase-10-closeout-v1.md`](./phases/phase-10-reliability-observability/phase-10-closeout-v1.md), [`./phases/phase-11-security/phase-11-closeout.md`](./phases/phase-11-security/phase-11-closeout.md). Commits `e027524a30df0716972ed94a0c4379dae48d55db` ([link](https://github.com/GambaGlobal/ai-email-project/commit/e027524a30df0716972ed94a0c4379dae48d55db)), `608286ae718fb49bbfef6a24bec874e9835f37ee` ([link](https://github.com/GambaGlobal/ai-email-project/commit/608286ae718fb49bbfef6a24bec874e9835f37ee)), `18b17fae9419ecbb789cc8cbc9dbe6d48236efc8` ([link](https://github.com/GambaGlobal/ai-email-project/commit/18b17fae9419ecbb789cc8cbc9dbe6d48236efc8)), `410daef9211b752ec6769455d722b5514e98aa36` ([link](https://github.com/GambaGlobal/ai-email-project/commit/410daef9211b752ec6769455d722b5514e98aa36)).
 
-## Next Focus: Phase 12
-- Canonical DR: [`./decisions/0013-phase-12-rebaseline-product-engine.md`](./decisions/0013-phase-12-rebaseline-product-engine.md)
-
-### Milestones (high-level)
-1. End-to-end draft pipeline completion on queued architecture.
-2. Exactly-once boundaries across notification -> processing -> draft write.
-3. Durable failure taxonomy, DLQ handling, and deterministic replay.
-4. Operator incident controls: kill switches, pause/resume, triage/monitor workflows.
-5. Production trust hardening for fallback behavior and auditability.
-
-### Step map (12.1-12.8)
-1. `12.1` Rebaseline DR + phase index lock (docs-only).
-2. `12.2` Draft pipeline stage contract freeze.
-3. `12.3` Exactly-once state ledger and invariants.
-4. `12.4` Draft write idempotency + overwrite safety enforcement.
-5. `12.5` DLQ/replay operator workflow hardening.
-6. `12.6` Kill-switch and degraded-mode fallback verification.
-7. `12.7` Deterministic E2E reliability smoke for draft path.
-8. `12.8` Phase 12 closeout + evidence gate.
+## Next Focus: Phase 13 (TBD)
+- Phase 12 is closed: [`./phases/phase-12-product-engine/phase-12-closeout.md`](./phases/phase-12-product-engine/phase-12-closeout.md)
+- Planning prompt: choose the first Step ID for Phase 13.

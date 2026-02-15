@@ -127,3 +127,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 11.7 | 2026-02-15 | SELF | Added DR-0012 to freeze Phase 11 security/privacy/retention trust posture, tradeoffs, and evidence references for sales and engineering guardrails. | Evidence: `pnpm -w repo:check`. |
 | 11.8 | 2026-02-15 | SELF | Added Phase 11 closeout doc with summary, evidence gate mapping, milestone map, completed step hashes, risks/open questions, and Phase 12 recommendations. | Evidence: `pnpm -w repo:check`. |
 | 12.1 | 2026-02-15 | SELF | Added DR-0013 rebaseline and rewrote `docs/phases.md` as the Phase 1-12 status/evidence source of truth with a reality baseline and Phase 12 next-focus map. | Evidence: `pnpm -w repo:check`. |
+| 12.9 | 2026-02-15 | SELF | Phase 12 closeout doc + evidence gate + milestone map + 12.1-12.8 backlog summary; updated `docs/phases.md` to mark Phase 12 Complete. | Evidence: `pnpm -w repo:check`. |
