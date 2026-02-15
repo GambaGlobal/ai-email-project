@@ -137,6 +137,21 @@ Expected worker match example:
 `{"event":"job.start","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,"tenantId":"...","stage":"doc_ingestion","queueName":"docs_ingestion"}`
 `{"event":"job.done","correlationId":"<CID>","jobId":"1","attempt":1,"maxAttempts":3,...}`
 
+## Gmail notification de-dupe
+Use this to verify Pub/Sub boundary idempotency (`messageId` duplicate -> one receipt row, no duplicate side effects).
+
+Run:
+1. `DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" pnpm -w smoke:notify-dedupe`
+
+Expected result:
+- `PASS: smoke:notify-dedupe PASS correlationId=<CID> messageId=<messageId>`
+
+Log verification:
+- `rg -a "<CID>" /tmp/ai-email-api.log | rg -e "mail.notification.received|mail.notification.deduped"`
+
+Receipt ledger verification:
+- `psql "$DATABASE_URL" -c "SELECT count(*) FROM mail_notification_receipts WHERE tenant_id='00000000-0000-0000-0000-000000000001'::uuid AND provider='gmail' AND message_id='<messageId>';"`
+
 ## One-command local dev
 Use this for a single-command bring-up/tear-down loop:
 1. `pnpm -w dev:up`

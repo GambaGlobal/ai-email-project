@@ -6,6 +6,7 @@
     "preflight": "node ./scripts/preflight.mjs",
     "typecheck": "node ./scripts/typecheck.mjs",
     "smoke:correlation": "node ./scripts/smoke-correlation.mjs",
+    "smoke:notify-dedupe": "node ./scripts/smoke-notification-dedupe.mjs",
     "queue:replay": "node ./scripts/queue-replay-failed.mjs",
     "queue:status": "node ./scripts/queue-status.mjs",
     "queue:pause": "ACTION=pause node ./scripts/queue-control.mjs",

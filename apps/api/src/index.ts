@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import gmailAuthRoutes from "./routes/gmail-auth.js";
 import gmailConnectionRoutes from "./routes/gmail-connection.js";
+import gmailNotificationRoutes from "./routes/gmail-notifications.js";
 import docsRoutes from "./routes/docs.js";
 
 const app = Fastify();
@@ -18,6 +19,7 @@ app.get("/healthz", async () => {
 
 await app.register(gmailAuthRoutes);
 await app.register(gmailConnectionRoutes);
+await app.register(gmailNotificationRoutes);
 await app.register(docsRoutes);
 
 const port = Number(process.env.PORT ?? 3001);

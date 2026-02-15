@@ -32,3 +32,11 @@ export async function queryOne(
   const result = await client.query(sql, params);
   return result.rows[0] ?? null;
 }
+
+export async function queryRowsGlobal(
+  sql: string,
+  params: unknown[]
+): Promise<QueryResultRow[]> {
+  const result = await pool.query(sql, params);
+  return result.rows;
+}
