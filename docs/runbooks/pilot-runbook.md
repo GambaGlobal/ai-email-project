@@ -493,9 +493,19 @@ Operator decision guide:
 GitHub Actions workflow `CI` runs:
 1. `pnpm -w repo:check`
 2. `pnpm -w db:migrate` against Docker service Postgres 16 + pgvector
-3. API + worker startup and `pnpm -w smoke:correlation` deterministic verification
+3. API + worker startup and smoke gate sequence:
+   - `pnpm -w smoke:correlation`
+   - `pnpm -w smoke:notify-dedupe`
+   - `pnpm -w smoke:notify-fanout`
+   - `pnpm -w smoke:notify-coalesce`
+   - `pnpm -w smoke:notify-historyid`
+   - `pnpm -w smoke:notify-poison`
+   - `pnpm -w smoke:mailbox-sync-run`
 
-On failures, go to GitHub Actions run details and open Artifacts:
+On failures, go to GitHub Actions run details:
+1. Open the failed run.
+2. Open `Artifacts`.
+3. Download `ci-smoke-logs`.
 - `ci-smoke-logs` includes `/tmp/ai-email-api.log`, `/tmp/ai-email-worker.log`, and PID files.
 
 ## Make CI required on main

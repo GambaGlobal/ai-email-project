@@ -98,6 +98,18 @@ jobs:
           SMOKE_LOG_TIMEOUT_MS: "20000"
         run: pnpm -w smoke:correlation
 
+      - name: Mail pipeline smokes
+        env:
+          SMOKE_LOG_TIMEOUT_MS: "20000"
+        run: |
+          set -euo pipefail
+          pnpm -w smoke:notify-dedupe
+          pnpm -w smoke:notify-fanout
+          pnpm -w smoke:notify-coalesce
+          pnpm -w smoke:notify-historyid
+          pnpm -w smoke:notify-poison
+          pnpm -w smoke:mailbox-sync-run
+
       - name: Cleanup background processes
         if: always()
         run: |
