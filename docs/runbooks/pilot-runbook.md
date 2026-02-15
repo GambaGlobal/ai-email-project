@@ -24,6 +24,16 @@ If you see `Local package.json exists, but node_modules missing`, dependencies a
 ## Purpose & scope
 This runbook defines pilot operations readiness, incident triage, mitigation, recovery, and evidence capture for the Gmail-first draft pipeline. It is designed for safe operations where no customer email is auto-sent in v1.
 
+## Phase 10 reliability policy
+Policy and roadmap references (use these first during incidents/planning):
+- Reliability policy DR: `docs/decisions/0011-phase-10-reliability-observability-v1-freeze.md`
+- Phase 10 freeze + evidence gate + backlog: `docs/phases/phase-10-reliability-observability/phase-10-freeze-v1.md`
+
+Fast operator path (under 30 seconds):
+1. `pnpm -w ops:monitor`
+2. `pnpm -w ops:triage`
+3. `pnpm -w ops:alert-drill` (dry-run or confirmed, as needed)
+
 ## Definitions
 - tenant: operator account boundary and isolation unit.
 - mailbox: connected inbox identity under a tenant.
