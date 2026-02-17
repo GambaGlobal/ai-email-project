@@ -16,6 +16,7 @@ export type GmailConnectionRow = {
   tenant_id: string;
   provider: "gmail";
   status: string;
+  connected_at: string | Date | null;
   last_verified_at: string | Date | null;
   updated_at: string | Date | null;
 };
@@ -83,6 +84,7 @@ export async function upsertGmailConnection(
         tenant_id::text AS tenant_id,
         provider,
         status,
+        connected_at,
         last_verified_at,
         updated_at
     `,
@@ -116,6 +118,7 @@ export async function getGmailConnection(
         tenant_id::text AS tenant_id,
         provider,
         status,
+        connected_at,
         last_verified_at,
         updated_at
       FROM mail_provider_connections

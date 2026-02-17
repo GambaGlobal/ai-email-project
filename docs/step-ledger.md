@@ -137,3 +137,4 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 | 13.7 | 2026-02-17 | SELF | Added Phase 13 closeout package: DR references (0014-0019), evidence gate, milestone map, 13.1-13.6 backlog summary with follow-up commit notes, and updated `docs/phases.md` to mark Phase 13 complete. | Evidence: `pnpm -w repo:check`. |
 | 13.0 | 2026-02-17 | SELF | Provision mailbox on Gmail connect + enqueue initial sync. | Evidence: `pnpm -w repo:check`. |
 | 13.1 | 2026-02-17 | SELF | Aligned Gmail OAuth callback/connection status to shared canonical connection store and enabled API info-level runtime logging so connect provisioning logs are observable on stdout. | Evidence: `pnpm -w repo:check`. |
+| 13.2 | 2026-02-17 | SELF | Added valid dev tenant UUID default for admin real-mode flows and enriched Gmail connection status API with provider/timestamps/email/address/mailbox metadata (no sensitive token fields). | Evidence: `pnpm -w repo:check`. |

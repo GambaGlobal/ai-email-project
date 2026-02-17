@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_DEV_TENANT_ID } from "../lib/dev-config";
 
 const DOCS_STORAGE_KEY = "operator_docs_v1";
 // Optional admin env for real docs mode:
 // NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
-const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID;
+const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const DOC_CATEGORIES = ["Policies", "Itineraries", "FAQs", "Packing"] as const;
 const DOC_STATUSES = ["queued", "indexing", "ready", "failed"] as const;

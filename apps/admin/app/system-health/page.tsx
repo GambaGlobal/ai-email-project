@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DEFAULT_DEV_TENANT_ID } from "../lib/dev-config";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
-const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID;
+const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
 const GMAIL_LAST_VERIFIED_KEY = "gmail_last_verified";

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DocsManager } from "../components/docs-manager";
 import { TonePoliciesManager } from "../components/tone-policies-manager";
+import { DEFAULT_DEV_TENANT_ID } from "../lib/dev-config";
 
 const STORAGE_KEY = "onboarding_step";
 const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
@@ -13,7 +14,7 @@ const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
 // Optional admin env wiring for real OAuth connect:
 // NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
-const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID;
+const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
 const UPLOAD_DOCS_STEP_INDEX = 2;

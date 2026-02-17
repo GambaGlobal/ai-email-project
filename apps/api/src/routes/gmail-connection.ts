@@ -1,9 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
-import { withTenantClient } from "../lib/db.js";
+import { queryOne, withTenantClient } from "../lib/db.js";
 import { getGmailConnection } from "../lib/gmail-connection-store.js";
 import { resolveTenantIdFromHeader, resolveTenantIdFromQuery } from "../lib/tenant.js";
 
 type ConnectionStatus = "connected" | "disconnected" | "reconnect_required";
+type MailboxLookupRow = {
+  mailbox_id?: string;
+  email_address?: string;
+  address?: string;
+};
 
 const gmailConnectionRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { tenant_id?: string } }>(
@@ -23,28 +28,72 @@ const gmailConnectionRoutes: FastifyPluginAsync = async (app) => {
       }
 
       try {
-        const row = await withTenantClient(tenantId, async (client) => {
-          return getGmailConnection(client, tenantId);
+        const connection = await withTenantClient(tenantId, async (client) => {
+          const connectionRow = await getGmailConnection(client, tenantId);
+          const mailboxRow = (await queryOne(
+            client,
+            `
+              SELECT
+                id::text AS mailbox_id,
+                email_address,
+                address
+              FROM mailboxes
+              WHERE tenant_id = $1
+                AND provider = 'gmail'
+              ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+              LIMIT 1
+            `,
+            [tenantId]
+          )) as MailboxLookupRow | null;
+
+          return {
+            row: connectionRow,
+            mailbox: mailboxRow
+          };
         });
 
         const normalizedStatus = normalizeStatus(
-          typeof row?.status === "string" ? row.status : null
+          typeof connection.row?.status === "string" ? connection.row.status : null
         );
+        const mailboxEmail =
+          typeof connection.mailbox?.email_address === "string"
+            ? connection.mailbox.email_address
+            : typeof connection.mailbox?.address === "string"
+              ? connection.mailbox.address
+              : null;
+        const mailboxAddress =
+          typeof connection.mailbox?.address === "string"
+            ? connection.mailbox.address
+            : mailboxEmail;
+        const connected = normalizedStatus === "connected";
 
         return reply.send({
+          provider: "gmail",
           status: normalizedStatus,
           last_verified_at:
-            row?.last_verified_at instanceof Date
-              ? row.last_verified_at.toISOString()
-              : typeof row?.last_verified_at === "string"
-                ? row.last_verified_at
+            connection.row?.last_verified_at instanceof Date
+              ? connection.row.last_verified_at.toISOString()
+              : typeof connection.row?.last_verified_at === "string"
+                ? connection.row.last_verified_at
+                : null,
+          connected_at:
+            connection.row?.connected_at instanceof Date
+              ? connection.row.connected_at.toISOString()
+              : typeof connection.row?.connected_at === "string"
+                ? connection.row.connected_at
                 : null,
           updated_at:
-            row?.updated_at instanceof Date
-              ? row.updated_at.toISOString()
-              : typeof row?.updated_at === "string"
-                ? row.updated_at
-                : new Date().toISOString()
+            connection.row?.updated_at instanceof Date
+              ? connection.row.updated_at.toISOString()
+              : typeof connection.row?.updated_at === "string"
+                ? connection.row.updated_at
+                : new Date().toISOString(),
+          email: connected ? mailboxEmail : null,
+          address: connected ? mailboxAddress : null,
+          mailbox_id:
+            connected && typeof connection.mailbox?.mailbox_id === "string"
+              ? connection.mailbox.mailbox_id
+              : null
         });
       } catch (error) {
         request.log.error({ error }, "Failed to load Gmail connection status");
