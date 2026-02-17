@@ -3,6 +3,7 @@ import { consumeOAuthState, issueOAuthState } from "../lib/oauth-state.js";
 import { resolveTenantIdForOAuthStart } from "../lib/tenant.js";
 import { withTenantClient } from "../lib/db.js";
 import { encryptToken } from "../lib/token-crypto.js";
+import { enqueueMailboxSync, mailboxSyncJobId } from "../lib/mailbox-sync-queue.js";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -19,6 +20,13 @@ type GoogleTokenResponse = {
   error?: string;
   error_description?: string;
 };
+
+type GmailProfileResponse = {
+  emailAddress?: string;
+  historyId?: string;
+};
+
+const DIGITS_ONLY = /^[0-9]+$/;
 
 const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { tenant_id?: string; return_to?: string } }>(
@@ -134,9 +142,39 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
           ? new Date(Date.now() + tokenPayload.expires_in * 1000).toISOString()
           : null;
 
+      let mailboxEmail: string;
+      let historyId = "0";
       try {
-        await withTenantClient(stateRecord.tenantId, async (client) => {
-          await client.query(
+        const profileResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${tokenPayload.access_token}`
+          }
+        });
+
+        const profilePayload = (await profileResponse.json()) as GmailProfileResponse;
+        if (!profileResponse.ok || !profilePayload.emailAddress) {
+          request.log.error(
+            { profilePayload, statusCode: profileResponse.status },
+            "Gmail profile lookup failed"
+          );
+          return reply.code(502).send({ error: "Unable to complete Gmail authentication" });
+        }
+
+        mailboxEmail = profilePayload.emailAddress.toLowerCase();
+        historyId =
+          typeof profilePayload.historyId === "string" && DIGITS_ONLY.test(profilePayload.historyId)
+            ? profilePayload.historyId
+            : "0";
+      } catch (error) {
+        request.log.error({ error }, "Gmail profile lookup request failed");
+        return reply.code(502).send({ error: "Unable to complete Gmail authentication" });
+      }
+
+      let provisioned: { mailboxId: string; connectionId: string };
+      try {
+        provisioned = await withTenantClient(stateRecord.tenantId, async (client) => {
+          const connectionResult = await client.query(
             `
               INSERT INTO mail_provider_connections (
                 tenant_id,
@@ -190,6 +228,7 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
                 connected_at = COALESCE(mail_provider_connections.connected_at, now()),
                 last_verified_at = now(),
                 updated_at = now()
+              RETURNING tenant_id::text AS tenant_id, provider
             `,
             [
               stateRecord.tenantId,
@@ -202,11 +241,123 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
               expiresAt
             ]
           );
+
+          const mailboxResult = await client.query(
+            `
+              WITH matched AS (
+                SELECT id
+                FROM mailboxes
+                WHERE tenant_id = $1
+                  AND provider = 'gmail'
+                  AND lower(email_address) = lower($2)
+                LIMIT 1
+              ),
+              updated AS (
+                UPDATE mailboxes
+                SET
+                  address = $2,
+                  provider_mailbox_id = $3,
+                  email_address = $2,
+                  status = 'connected',
+                  updated_at = now()
+                WHERE id IN (SELECT id FROM matched)
+                RETURNING id::text AS mailbox_id
+              ),
+              inserted AS (
+                INSERT INTO mailboxes (
+                  tenant_id,
+                  provider,
+                  address,
+                  provider_mailbox_id,
+                  email_address,
+                  status,
+                  updated_at
+                )
+                SELECT $1, 'gmail', $2, $3, $2, 'connected', now()
+                WHERE NOT EXISTS (SELECT 1 FROM updated)
+                ON CONFLICT (tenant_id, provider, address)
+                DO UPDATE SET
+                  provider_mailbox_id = EXCLUDED.provider_mailbox_id,
+                  email_address = EXCLUDED.email_address,
+                  status = 'connected',
+                  updated_at = now()
+                RETURNING id::text AS mailbox_id
+              )
+              SELECT mailbox_id FROM updated
+              UNION ALL
+              SELECT mailbox_id FROM inserted
+              LIMIT 1
+            `,
+            [stateRecord.tenantId, mailboxEmail, mailboxEmail]
+          );
+
+          const mailboxId = String(mailboxResult.rows[0]?.mailbox_id ?? "");
+          if (!mailboxId) {
+            throw new Error("mailbox upsert failed");
+          }
+
+          await client.query(
+            `
+              INSERT INTO mailbox_sync_state (
+                tenant_id,
+                mailbox_id,
+                provider,
+                last_history_id,
+                pending_max_history_id,
+                pending_updated_at,
+                updated_at
+              )
+              VALUES ($1, $2, 'gmail', $3::numeric, $3::numeric, now(), now())
+              ON CONFLICT (tenant_id, mailbox_id, provider)
+              DO UPDATE SET
+                pending_max_history_id = GREATEST(
+                  mailbox_sync_state.pending_max_history_id,
+                  EXCLUDED.pending_max_history_id
+                ),
+                updated_at = now()
+            `,
+            [stateRecord.tenantId, mailboxId, historyId]
+          );
+
+          const connectionRow = connectionResult.rows[0] as
+            | { tenant_id?: string; provider?: string }
+            | undefined;
+          const connectionId = `${connectionRow?.tenant_id ?? stateRecord.tenantId}:${connectionRow?.provider ?? "gmail"}`;
+
+          return {
+            mailboxId,
+            connectionId
+          };
         });
       } catch (error) {
-        request.log.error({ error }, "Failed to persist Gmail OAuth connection");
+        request.log.error({ error }, "Failed to provision Gmail mailbox on OAuth callback");
         return reply.code(500).send({ error: "Unable to save Gmail connection" });
       }
+
+      try {
+        const jobId = mailboxSyncJobId("gmail", provisioned.mailboxId);
+        await enqueueMailboxSync(
+          {
+            tenantId: stateRecord.tenantId,
+            mailboxId: provisioned.mailboxId,
+            provider: "gmail"
+          },
+          jobId
+        );
+      } catch (error) {
+        request.log.error({ error }, "Failed to enqueue initial mailbox sync");
+        return reply.code(500).send({ error: "Unable to initialize mailbox sync" });
+      }
+
+      request.log.info(
+        {
+          tenant_id: stateRecord.tenantId,
+          mailbox_id: provisioned.mailboxId,
+          email: mailboxEmail,
+          connection_id: provisioned.connectionId
+        },
+        "gmail connect provisioned mailbox"
+      );
 
       const adminBaseUrl = process.env.ADMIN_BASE_URL ?? "http://localhost:3000";
       const redirectUrl = new URL(stateRecord.returnPath, adminBaseUrl);
