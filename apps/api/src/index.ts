@@ -11,7 +11,11 @@ import { validateS3ConfigOnBoot } from "./lib/s3.js";
 
 validateS3ConfigOnBoot();
 
-const app = Fastify();
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL ?? "info"
+  }
+});
 
 await app.register(multipart, {
   limits: {

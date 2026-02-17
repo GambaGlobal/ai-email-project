@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
-import { queryOne, withTenantClient } from "../lib/db.js";
+import { withTenantClient } from "../lib/db.js";
+import { getGmailConnection } from "../lib/gmail-connection-store.js";
 import { resolveTenantIdFromHeader, resolveTenantIdFromQuery } from "../lib/tenant.js";
 
 type ConnectionStatus = "connected" | "disconnected" | "reconnect_required";
@@ -23,20 +24,7 @@ const gmailConnectionRoutes: FastifyPluginAsync = async (app) => {
 
       try {
         const row = await withTenantClient(tenantId, async (client) => {
-          return queryOne(
-            client,
-            `
-              SELECT
-                status,
-                last_verified_at,
-                updated_at
-              FROM mail_provider_connections
-              WHERE tenant_id = $1
-                AND provider = 'gmail'
-              LIMIT 1
-            `,
-            [tenantId]
-          );
+          return getGmailConnection(client, tenantId);
         });
 
         const normalizedStatus = normalizeStatus(

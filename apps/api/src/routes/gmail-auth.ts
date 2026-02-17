@@ -4,6 +4,7 @@ import { resolveTenantIdForOAuthStart } from "../lib/tenant.js";
 import { withTenantClient } from "../lib/db.js";
 import { encryptToken } from "../lib/token-crypto.js";
 import { enqueueMailboxSync, mailboxSyncJobId } from "../lib/mailbox-sync-queue.js";
+import { upsertGmailConnection } from "../lib/gmail-connection-store.js";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -174,73 +175,16 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
       let provisioned: { mailboxId: string; connectionId: string };
       try {
         provisioned = await withTenantClient(stateRecord.tenantId, async (client) => {
-          const connectionResult = await client.query(
-            `
-              INSERT INTO mail_provider_connections (
-                tenant_id,
-                provider,
-                status,
-                access_token_ciphertext,
-                access_token_iv,
-                access_token_tag,
-                refresh_token_ciphertext,
-                refresh_token_iv,
-                refresh_token_tag,
-                token_expires_at,
-                connected_at,
-                last_verified_at,
-                updated_at
-              )
-              VALUES (
-                $1,
-                'gmail',
-                'connected',
-                $2,
-                $3,
-                $4,
-                $5,
-                $6,
-                $7,
-                $8,
-                now(),
-                now(),
-                now()
-              )
-              ON CONFLICT (tenant_id, provider)
-              DO UPDATE SET
-                status = 'connected',
-                access_token_ciphertext = EXCLUDED.access_token_ciphertext,
-                access_token_iv = EXCLUDED.access_token_iv,
-                access_token_tag = EXCLUDED.access_token_tag,
-                refresh_token_ciphertext = COALESCE(
-                  EXCLUDED.refresh_token_ciphertext,
-                  mail_provider_connections.refresh_token_ciphertext
-                ),
-                refresh_token_iv = COALESCE(
-                  EXCLUDED.refresh_token_iv,
-                  mail_provider_connections.refresh_token_iv
-                ),
-                refresh_token_tag = COALESCE(
-                  EXCLUDED.refresh_token_tag,
-                  mail_provider_connections.refresh_token_tag
-                ),
-                token_expires_at = EXCLUDED.token_expires_at,
-                connected_at = COALESCE(mail_provider_connections.connected_at, now()),
-                last_verified_at = now(),
-                updated_at = now()
-              RETURNING tenant_id::text AS tenant_id, provider
-            `,
-            [
-              stateRecord.tenantId,
-              encryptedAccessToken.ciphertext,
-              encryptedAccessToken.iv,
-              encryptedAccessToken.tag,
-              encryptedRefreshToken?.ciphertext ?? null,
-              encryptedRefreshToken?.iv ?? null,
-              encryptedRefreshToken?.tag ?? null,
-              expiresAt
-            ]
-          );
+          const connectionResult = await upsertGmailConnection(client, {
+            tenantId: stateRecord.tenantId,
+            accessTokenCiphertext: encryptedAccessToken.ciphertext,
+            accessTokenIv: encryptedAccessToken.iv,
+            accessTokenTag: encryptedAccessToken.tag,
+            refreshTokenCiphertext: encryptedRefreshToken?.ciphertext ?? null,
+            refreshTokenIv: encryptedRefreshToken?.iv ?? null,
+            refreshTokenTag: encryptedRefreshToken?.tag ?? null,
+            tokenExpiresAt: expiresAt
+          });
 
           const mailboxResult = await client.query(
             `
@@ -319,10 +263,7 @@ const gmailAuthRoutes: FastifyPluginAsync = async (app) => {
             [stateRecord.tenantId, mailboxId, historyId]
           );
 
-          const connectionRow = connectionResult.rows[0] as
-            | { tenant_id?: string; provider?: string }
-            | undefined;
-          const connectionId = `${connectionRow?.tenant_id ?? stateRecord.tenantId}:${connectionRow?.provider ?? "gmail"}`;
+          const connectionId = `${connectionResult.tenant_id}:${connectionResult.provider}`;
 
           return {
             mailboxId,
