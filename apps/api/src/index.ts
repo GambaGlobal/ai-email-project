@@ -5,6 +5,7 @@ import gmailConnectionRoutes from "./routes/gmail-connection.js";
 import gmailNotificationRoutes from "./routes/gmail-notifications.js";
 import docsRoutes from "./routes/docs.js";
 import docVersionStorageRoutes from "./routes/doc-version-storage.js";
+import retrievalRoutes from "./routes/retrieval.js";
 import { validateS3ConfigOnBoot } from "./lib/s3.js";
 
 validateS3ConfigOnBoot();
@@ -26,6 +27,7 @@ await app.register(gmailConnectionRoutes);
 await app.register(gmailNotificationRoutes);
 await app.register(docsRoutes);
 await app.register(docVersionStorageRoutes);
+await app.register(retrievalRoutes);
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
