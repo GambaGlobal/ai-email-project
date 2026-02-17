@@ -12,6 +12,7 @@
     "smoke:notify-historyid": "node ./scripts/smoke-notification-historyid-precision.mjs",
     "smoke:notify-poison": "node ./scripts/smoke-notification-poison.mjs",
     "smoke:mailbox-sync-run": "node ./scripts/smoke-mailbox-sync-run.mjs",
+    "smoke:gmail-draft-e2e": "node ./scripts/smoke-gmail-draft-e2e.mjs",
     "queue:replay": "node ./scripts/queue-replay-failed.mjs",
     "queue:status": "node ./scripts/queue-status.mjs",
     "queue:pause": "ACTION=pause node ./scripts/queue-control.mjs",

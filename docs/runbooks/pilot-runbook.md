@@ -246,6 +246,32 @@ Look for:
 - `status='done'`
 - `fetched_count` (v1 stub defaults to `0`)
 
+## End-to-end Gmail draft smoke (real inbox)
+Goal:
+- prove end-to-end spine: connected mailbox -> notification/sync -> fetch_thread -> writeback -> draft created in the same Gmail thread.
+- safety: harness never sends mail; it only verifies draft existence.
+
+Prerequisites:
+1. API + worker are running.
+2. Tenant is connected to Gmail.
+3. Gmail pipeline flags are enabled in worker runtime (`MAILBOX_PIPELINE_ENABLED=1`, `MAILBOX_SYNC_DRAFT_WRITEBACK=1`).
+4. You have sent a real inbound test email to the connected inbox with a unique subject token.
+
+Run command:
+`TENANT_ID="<tenant-uuid>" TEST_INBOX_EMAIL="<connected-mailbox-email>" TEST_TRIGGER_SUBJECT="smoke-e2e-$(date +%s)" API_BASE_URL="http://127.0.0.1:3101" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TOKEN_ENCRYPTION_KEY="<token-key>" TIMEOUT_SECONDS="120" pnpm -w smoke:gmail-draft-e2e`
+
+Expected success output:
+- `PASS: smoke:gmail-draft-e2e tenantId=<...> mailboxId=<...> threadId=<...> draftIds=<...>`
+
+Expected failure behavior:
+- fast fail for missing env/prereqs (`TENANT_ID`, `TEST_INBOX_EMAIL`, `TEST_TRIGGER_SUBJECT`, `DATABASE_URL`, `REDIS_URL`, `TOKEN_ENCRYPTION_KEY`)
+- timeout diagnostics include connection payload and queue evidence for `mailbox_sync`, `fetch_thread`, and `writeback`.
+
+Manual UI confirmation:
+1. Open Gmail for the connected inbox.
+2. Open the thread with `TEST_TRIGGER_SUBJECT`.
+3. Confirm a draft reply exists in that same thread.
+
 ## Gmail HistoryId safety
 Rules:
 - Treat Gmail `historyId` as a digits-only string end-to-end; never cast to JS `Number`.
