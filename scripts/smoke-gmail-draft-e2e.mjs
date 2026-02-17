@@ -12,6 +12,7 @@ const tokenEncryptionKey = requiredEnv("TOKEN_ENCRYPTION_KEY");
 const redisUrl = requiredEnv("REDIS_URL");
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:3101";
 const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS ?? "120");
+const runTwice = process.env.RUN_TWICE === "1" || process.argv.includes("--twice");
 
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   fail("TIMEOUT_SECONDS must be a positive number");
@@ -21,8 +22,6 @@ const timeoutMs = timeoutSeconds * 1000;
 const startedAtMs = Date.now();
 const deadlineMs = startedAtMs + timeoutMs;
 
-const correlationId = randomUUID();
-const notificationMessageId = `smoke-e2e-${randomUUID()}`;
 const mailboxSyncJobId = (mailboxId) => `mailbox_sync-gmail-${mailboxId}`;
 
 function requiredEnv(key) {
@@ -223,13 +222,13 @@ async function triggerNotification(input) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-correlation-id": correlationId,
+      "x-correlation-id": input.correlationId,
       "x-tenant-id": tenantId,
       "x-mailbox-id": input.mailboxId
     },
     body: JSON.stringify({
       message: {
-        messageId: notificationMessageId,
+        messageId: input.notificationMessageId,
         data: payload
       },
       subscription: "projects/local/subscriptions/smoke-gmail-draft-e2e"
@@ -385,32 +384,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const psqlBin = resolvePsqlBin();
-const redis = new IORedis(redisUrl, {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false
-});
-const mailboxSyncQueue = new Queue("mailbox_sync", { connection: redis });
-const fetchThreadQueue = new Queue("fetch_thread", { connection: redis });
-const writebackQueue = new Queue("writeback", { connection: redis });
-
-try {
-  console.log(`smoke:gmail-draft-e2e start tenantId=${tenantId} subject="${testTriggerSubject}"`);
-  console.log("smoke:gmail-draft-e2e safety=read-only-no-send");
-
-  const connectionStatus = await getConnectionStatus();
-  const accessToken = await loadAccessTokenFromDb(psqlBin);
-  const profile = await getGmailProfile(accessToken);
-  const historyId = typeof profile.historyId === "string" ? profile.historyId : null;
-  if (!historyId) {
-    fail("gmail_profile_missing_history_id");
-  }
+async function runSingleCycle(input) {
+  const cycleStartedAtMs = Date.now();
+  const correlationId = randomUUID();
+  const notificationMessageId = `smoke-e2e-${randomUUID()}`;
 
   await triggerNotification({
-    mailboxId: connectionStatus.mailboxId,
-    historyId
+    mailboxId: input.connectionStatus.mailboxId,
+    historyId: input.historyId,
+    correlationId,
+    notificationMessageId
   });
-  const syncJobId = await enqueueMailboxSync(mailboxSyncQueue, connectionStatus.mailboxId);
+  const syncJobId = await enqueueMailboxSync(mailboxSyncQueue, input.connectionStatus.mailboxId);
 
   let threadId = null;
   let draftIds = [];
@@ -429,34 +414,39 @@ try {
     }
 
     if (!threadId) {
-      threadId = await findThreadIdBySubject(accessToken);
+      threadId = await findThreadIdBySubject(input.accessToken);
     }
 
     if (threadId) {
-      draftIds = await listDraftIdsForThread(accessToken, threadId);
+      draftIds = await listDraftIdsForThread(input.accessToken, threadId);
 
       const fetchEvidence = await collectStageEvidence(fetchThreadQueue, "fetch_thread", {
         tenantId,
-        mailboxId: connectionStatus.mailboxId,
+        mailboxId: input.connectionStatus.mailboxId,
         threadId,
-        startedAtMs
+        startedAtMs: cycleStartedAtMs
       });
       fetchThreadRan = fetchThreadRan || fetchEvidence.ran;
 
       const writebackEvidence = await collectStageEvidence(writebackQueue, "writeback", {
         tenantId,
-        mailboxId: connectionStatus.mailboxId,
+        mailboxId: input.connectionStatus.mailboxId,
         threadId,
-        startedAtMs
+        startedAtMs: cycleStartedAtMs
       });
       writebackRan = writebackRan || writebackEvidence.ran;
     }
 
     if (mailboxSyncRan && fetchThreadRan && writebackRan && draftIds.length > 0 && threadId) {
-      console.log(
-        `PASS: smoke:gmail-draft-e2e tenantId=${tenantId} mailboxId=${connectionStatus.mailboxId} threadId=${threadId} draftIds=${draftIds.join(",")}`
-      );
-      process.exit(0);
+      return {
+        cycle: input.cycle,
+        correlationId,
+        threadId,
+        draftIds,
+        mailboxSyncRan,
+        fetchThreadRan,
+        writebackRan
+      };
     }
 
     await sleep(delayMs);
@@ -464,9 +454,11 @@ try {
   }
 
   const diagnostics = {
+    cycle: input.cycle,
     timeoutSeconds,
-    connection: connectionStatus.connection,
-    mailboxId: connectionStatus.mailboxId,
+    runTwice,
+    connection: input.connectionStatus.connection,
+    mailboxId: input.connectionStatus.mailboxId,
     threadId,
     draftIds,
     mailboxSync: await collectQueueDiagnostic(mailboxSyncQueue, "mailbox_sync"),
@@ -480,6 +472,60 @@ try {
   };
 
   fail("timeout_waiting_for_draft_in_thread", JSON.stringify(diagnostics, null, 2));
+}
+
+const psqlBin = resolvePsqlBin();
+const redis = new IORedis(redisUrl, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false
+});
+const mailboxSyncQueue = new Queue("mailbox_sync", { connection: redis });
+const fetchThreadQueue = new Queue("fetch_thread", { connection: redis });
+const writebackQueue = new Queue("writeback", { connection: redis });
+
+try {
+  console.log(
+    `smoke:gmail-draft-e2e start tenantId=${tenantId} subject="${testTriggerSubject}" runTwice=${runTwice}`
+  );
+  console.log("smoke:gmail-draft-e2e safety=read-only-no-send");
+
+  const connectionStatus = await getConnectionStatus();
+  const accessToken = await loadAccessTokenFromDb(psqlBin);
+  const profile = await getGmailProfile(accessToken);
+  const historyId = typeof profile.historyId === "string" ? profile.historyId : null;
+  if (!historyId) {
+    fail("gmail_profile_missing_history_id");
+  }
+
+  const cycleOne = await runSingleCycle({
+    cycle: 1,
+    connectionStatus,
+    accessToken,
+    historyId
+  });
+
+  let finalResult = cycleOne;
+  if (runTwice) {
+    const cycleTwo = await runSingleCycle({
+      cycle: 2,
+      connectionStatus,
+      accessToken,
+      historyId
+    });
+    finalResult = cycleTwo;
+  }
+
+  if (finalResult.draftIds.length !== 1) {
+    fail(
+      "idempotency_draft_count_mismatch",
+      `expected exactly 1 draft in thread after run${runTwice ? "s" : ""}, got ${finalResult.draftIds.length}: ${finalResult.draftIds.join(",")}`
+    );
+  }
+
+  console.log(
+    `PASS: smoke:gmail-draft-e2e tenantId=${tenantId} mailboxId=${connectionStatus.mailboxId} threadId=${finalResult.threadId} draftIds=${finalResult.draftIds.join(",")} runTwice=${runTwice}`
+  );
+  process.exit(0);
 } finally {
   await Promise.allSettled([
     mailboxSyncQueue.close(),

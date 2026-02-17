@@ -267,6 +267,10 @@ Expected failure behavior:
 - fast fail for missing env/prereqs (`TENANT_ID`, `TEST_INBOX_EMAIL`, `TEST_TRIGGER_SUBJECT`, `DATABASE_URL`, `REDIS_URL`, `TOKEN_ENCRYPTION_KEY`)
 - timeout diagnostics include connection payload and queue evidence for `mailbox_sync`, `fetch_thread`, and `writeback`.
 
+Idempotency check (run twice, same subject token):
+- `TENANT_ID="<tenant-uuid>" TEST_INBOX_EMAIL="<connected-mailbox-email>" TEST_TRIGGER_SUBJECT="<same-subject-token>" API_BASE_URL="http://127.0.0.1:3101" DATABASE_URL="postgresql://127.0.0.1:5432/ai_email_dev" REDIS_URL="redis://127.0.0.1:6379" TOKEN_ENCRYPTION_KEY="<token-key>" RUN_TWICE=1 pnpm -w smoke:gmail-draft-e2e`
+- expected: PASS output with exactly one draft id in the thread (`draftIds=<single-id>`), proving draft reuse/update instead of duplicate create.
+
 Manual UI confirmation:
 1. Open Gmail for the connected inbox.
 2. Open the thread with `TEST_TRIGGER_SUBJECT`.

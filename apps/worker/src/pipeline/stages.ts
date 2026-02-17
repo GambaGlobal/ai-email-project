@@ -305,6 +305,43 @@ export function createPipelineStageHandlers(input: {
             idempotencyKey: job.idempotencyKey,
             triggeringMessageId: job.triggeringMessageId
           });
+          if (upsertResult.action === "created") {
+            // eslint-disable-next-line no-console
+            console.log(
+              JSON.stringify({
+                event: "draft writeback: created",
+                tenantId: job.tenantId,
+                mailboxId: job.mailboxId,
+                threadId: job.threadId,
+                draftId: upsertResult.draftId,
+                reasonCode
+              })
+            );
+          } else if (upsertResult.action === "updated") {
+            // eslint-disable-next-line no-console
+            console.log(
+              JSON.stringify({
+                event: "draft writeback: updated existing",
+                tenantId: job.tenantId,
+                mailboxId: job.mailboxId,
+                threadId: job.threadId,
+                draftId: upsertResult.draftId,
+                reasonCode
+              })
+            );
+          } else if (upsertResult.action === "unchanged") {
+            // eslint-disable-next-line no-console
+            console.log(
+              JSON.stringify({
+                event: "draft writeback: skipped (already matches)",
+                tenantId: job.tenantId,
+                mailboxId: job.mailboxId,
+                threadId: job.threadId,
+                draftId: upsertResult.draftId,
+                reasonCode
+              })
+            );
+          }
         } catch (error) {
           if (error instanceof MissingRecipientError) {
             state = "needs_review";

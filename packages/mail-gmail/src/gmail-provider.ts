@@ -732,6 +732,10 @@ function extractRawBody(raw: string | undefined): string {
   return decoded;
 }
 
+function normalizeDraftBodyForComparison(raw: string | undefined): string {
+  return normalizeWhitespace(extractRawBody(raw));
+}
+
 function normalizeLabelName(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -1037,6 +1041,13 @@ export class GmailProvider implements MailProvider {
       (draft) => draft.message?.threadId === threadId && typeof draft.id === "string"
     );
 
+    let exactMarkerDraft:
+      | { draftId: string; existingRawBody: string }
+      | undefined;
+    let reusableCopilotDraft:
+      | { draftId: string; existingRawBody: string }
+      | undefined;
+
     for (const draft of threadDrafts) {
       const draftId = String(draft.id);
       const draftDetail = await this.apiClient.getDraft({
@@ -1048,22 +1059,46 @@ export class GmailProvider implements MailProvider {
       if (!parsedMarker.key) {
         continue;
       }
-      if (parsedMarker.key !== req.marker.draftKey) {
+
+      if (parsedMarker.mailbox && parsedMarker.mailbox !== String(context.mailboxId)) {
+        if (parsedMarker.key === req.marker.draftKey) {
+          throw new DraftOwnershipMismatchError({ draftId });
+        }
         continue;
       }
-      if (parsedMarker.mailbox && parsedMarker.mailbox !== String(context.mailboxId)) {
-        throw new DraftOwnershipMismatchError({ draftId });
+
+      const existingRawBody = normalizeDraftBodyForComparison(draftDetail.message?.raw);
+
+      if (parsedMarker.key === req.marker.draftKey) {
+        exactMarkerDraft = { draftId, existingRawBody };
+        break;
       }
+
+      if (!reusableCopilotDraft) {
+        reusableCopilotDraft = { draftId, existingRawBody };
+      }
+    }
+
+    const selectedDraft = exactMarkerDraft ?? reusableCopilotDraft;
+    if (selectedDraft) {
+      const nextRawBody = normalizeDraftBodyForComparison(raw);
+      if (selectedDraft.existingRawBody === nextRawBody) {
+        return {
+          action: "unchanged",
+          draftId: selectedDraft.draftId as DraftId
+        };
+      }
+
       const updateResponse = await this.apiClient.updateDraft({
         accessToken: auth.accessToken,
         userId,
-        draftId,
+        draftId: selectedDraft.draftId,
         threadId,
         raw
       });
       return {
         action: "updated",
-        draftId: (updateResponse.id || draftId) as DraftId
+        draftId: (updateResponse.id || selectedDraft.draftId) as DraftId
       };
     }
 
