@@ -7,7 +7,24 @@ type CreateGenerationAuditInput = {
   correlationId?: string | null;
 };
 
+function toSafeAuditPayload(payload: CitationPayload): CitationPayload {
+  return {
+    ...payload,
+    sources: payload.sources.map((source) => {
+      if (source.source_type === "doc_chunk") {
+        const { content: _content, ...rest } = source;
+        return rest;
+      }
+
+      const { answer: _answer, ...rest } = source;
+      return rest;
+    })
+  };
+}
+
 export async function createGenerationAudit(input: CreateGenerationAuditInput): Promise<string> {
+  const safePayload = toSafeAuditPayload(input.citationPayload);
+
   return withTenantClient(input.tenantId, async (client) => {
     const row = await queryOne(
       client,
@@ -25,10 +42,10 @@ export async function createGenerationAudit(input: CreateGenerationAuditInput): 
       `,
       [
         input.tenantId,
-        input.citationPayload.version,
-        input.citationPayload.reason,
-        input.citationPayload.query,
-        JSON.stringify(input.citationPayload),
+        safePayload.version,
+        safePayload.reason,
+        safePayload.query,
+        JSON.stringify(safePayload),
         input.correlationId ?? null
       ]
     );
