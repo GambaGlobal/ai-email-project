@@ -3,6 +3,7 @@
 ## Endpoint
 - `POST /v1/retrieval/query`
 - Tenant context is required via `x-tenant-id` header.
+- Response shape is `CitationPayload` (`version`, `query`, `reason`, `sources[]`).
 
 ## Canonical-First Rule
 1. Normalize query text (lowercase, collapse whitespace, tokenize).
@@ -27,7 +28,7 @@
 ## Payload Defaults
 - Responses are excerpt-only by default.
 - `excerpt` is always present and capped to `800` chars by default.
-- `content` is omitted unless explicitly enabled for debugging.
+- `content`/`answer` fields are omitted unless explicitly enabled for debugging.
 
 ## Debugging
 - Set `RETRIEVAL_INCLUDE_CONTENT=true` to include full source `content` in response payloads.
@@ -45,19 +46,18 @@ curl -X POST http://localhost:3001/v1/retrieval/query \
 ## Example Response
 ```json
 {
+  "version": "v1",
   "query": "What is your refund policy?",
   "reason": "canonical_qa",
-  "top_sources": [
+  "sources": [
     {
       "source_type": "canonical_qa",
-      "source_id": "f82ce5bd-9393-44ca-a36d-7ce28f994df8",
+      "canonical_id": "f82ce5bd-9393-44ca-a36d-7ce28f994df8",
       "tenant_id": "11111111-1111-4111-8111-111111111111",
       "doc_id": null,
       "version_id": null,
-      "chunk_index": null,
-      "start_char": null,
-      "end_char": null,
-      "content_sha256": "2df5f4f2f7fdbcb17e3ef4383fceec953cbfd12f8f3c0d6737f7a26e08d5f7b6",
+      "question": "What is your refund policy?",
+      "status": "APPROVED",
       "excerpt": "Refunds are available up to 14 days before trip departure...",
       "score": 1
     }

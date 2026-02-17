@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
-import type { RetrievalResult, RetrievalSource } from "@ai-email/shared";
+import {
+  CITATION_CONTRACT_VERSION,
+  type CitationPayload,
+  type CitationSourceCanonicalQA,
+  type CitationSourceDocChunk
+} from "@ai-email/shared";
 import { withTenantClient } from "./db.js";
 import { embedTexts } from "./openai-embeddings.js";
 
@@ -21,6 +25,7 @@ type CanonicalQaRow = {
   version_id: string | null;
   question: string;
   answer: string;
+  status: "DRAFT" | "APPROVED" | "ARCHIVED";
 };
 
 type DocChunkRow = {
@@ -100,7 +105,7 @@ export function normalizeQuery(query: string): NormalizedQuery {
   };
 }
 
-export async function retrieveSources(input: RetrieveSourcesInput): Promise<RetrievalResult> {
+export async function retrieveSources(input: RetrieveSourcesInput): Promise<CitationPayload> {
   const topK = resolveTopK(input.topK);
   const normalizedQuery = normalizeQuery(input.query);
   const canonicalSources = await retrieveCanonicalQA(input.tenantId, normalizedQuery, topK);
@@ -110,17 +115,19 @@ export async function retrieveSources(input: RetrieveSourcesInput): Promise<Retr
     const fallbackSources = remaining > 0 ? await retrieveDocChunks(input.tenantId, normalizedQuery.raw, remaining) : [];
 
     return {
+      version: CITATION_CONTRACT_VERSION,
       query: normalizedQuery.raw,
       reason: "canonical_qa",
-      top_sources: [...canonicalSources, ...fallbackSources].slice(0, topK)
+      sources: [...canonicalSources, ...fallbackSources].slice(0, topK)
     };
   }
 
   const chunkSources = await retrieveDocChunks(input.tenantId, normalizedQuery.raw, topK);
   return {
+    version: CITATION_CONTRACT_VERSION,
     query: normalizedQuery.raw,
     reason: "doc_chunks",
-    top_sources: chunkSources
+    sources: chunkSources
   };
 }
 
@@ -128,7 +135,7 @@ async function retrieveCanonicalQA(
   tenantId: string,
   query: NormalizedQuery,
   topK: number
-): Promise<RetrievalSource[]> {
+): Promise<CitationSourceCanonicalQA[]> {
   const tokens = query.tokens.slice(0, MAX_CANONICAL_QUERY_TOKENS);
   if (tokens.length === 0) {
     return [];
@@ -137,22 +144,19 @@ async function retrieveCanonicalQA(
   return withTenantClient(tenantId, async (client) => {
     const candidates = await fetchCanonicalCandidates(client, tenantId, query.normalized, tokens, topK);
     return candidates.map((row) => {
-      const answerSha = createHash("sha256").update(row.answer).digest("hex");
       const score = computeCanonicalScore(query.normalized, query.tokens, row.question);
       return {
         source_type: "canonical_qa",
-        source_id: row.id,
+        canonical_id: row.id,
         tenant_id: row.tenant_id,
         doc_id: row.doc_id,
         version_id: row.version_id,
-        chunk_index: null,
-        start_char: null,
-        end_char: null,
-        content_sha256: answerSha,
+        question: row.question,
+        status: row.status,
         excerpt: getExcerpt(row.answer, EXCERPT_MAX_CHARS),
-        ...(INCLUDE_CONTENT ? { content: row.answer } : {}),
+        ...(INCLUDE_CONTENT ? { answer: row.answer } : {}),
         score
-      } satisfies RetrievalSource;
+      } satisfies CitationSourceCanonicalQA;
     });
   });
 }
@@ -181,7 +185,8 @@ async function fetchCanonicalCandidates(
       doc_id,
       version_id,
       question,
-      answer
+      answer,
+      status
     FROM canonical_qa
     WHERE tenant_id = $1
       AND status = 'APPROVED'
@@ -217,7 +222,7 @@ function computeCanonicalScore(queryNormalized: string, tokens: string[], questi
   return Number((matched / tokens.length).toFixed(6));
 }
 
-async function retrieveDocChunks(tenantId: string, query: string, topK: number): Promise<RetrievalSource[]> {
+async function retrieveDocChunks(tenantId: string, query: string, topK: number): Promise<CitationSourceDocChunk[]> {
   if (topK <= 0) {
     return [];
   }
@@ -262,7 +267,7 @@ async function retrieveDocChunks(tenantId: string, query: string, topK: number):
       const score = Number(Math.max(0, 1 - Number(row.distance)).toFixed(6));
       return {
         source_type: "doc_chunk",
-        source_id: row.id,
+        chunk_id: row.id,
         tenant_id: row.tenant_id,
         doc_id: row.doc_id,
         version_id: row.version_id,
@@ -273,7 +278,7 @@ async function retrieveDocChunks(tenantId: string, query: string, topK: number):
         excerpt: getExcerpt(row.content, EXCERPT_MAX_CHARS),
         ...(INCLUDE_CONTENT ? { content: row.content } : {}),
         score
-      } satisfies RetrievalSource;
+      } satisfies CitationSourceDocChunk;
     });
   });
 }
