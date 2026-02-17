@@ -8,6 +8,11 @@ const DEFAULT_TOP_K = 5;
 const MAX_TOP_K = 20;
 const MAX_CANONICAL_RESULTS = 3;
 const MAX_CANONICAL_QUERY_TOKENS = 10;
+const DEFAULT_EXCERPT_MAX_CHARS = 800;
+const MIN_EXCERPT_MAX_CHARS = 100;
+const MAX_EXCERPT_MAX_CHARS = 5000;
+const INCLUDE_CONTENT = process.env.RETRIEVAL_INCLUDE_CONTENT === "true";
+const EXCERPT_MAX_CHARS = resolveExcerptMaxChars(process.env.RETRIEVAL_EXCERPT_MAX_CHARS);
 
 type CanonicalQaRow = {
   id: string;
@@ -42,6 +47,30 @@ export type RetrieveSourcesInput = {
   query: string;
   topK?: number;
 };
+
+function resolveExcerptMaxChars(value: string | undefined): number {
+  if (value == null || value.trim().length === 0) {
+    return DEFAULT_EXCERPT_MAX_CHARS;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_EXCERPT_MAX_CHARS;
+  }
+
+  return Math.min(MAX_EXCERPT_MAX_CHARS, Math.max(MIN_EXCERPT_MAX_CHARS, parsed));
+}
+
+function getExcerpt(text: string, maxChars: number): string {
+  const source = String(text).replace(/\s+$/u, "");
+  if (source.length <= maxChars) {
+    return source;
+  }
+  if (maxChars <= 1) {
+    return "…";
+  }
+  return `${source.slice(0, maxChars - 1)}…`;
+}
 
 export function resolveTopK(value: number | undefined): number {
   if (value == null || !Number.isFinite(value)) {
@@ -120,8 +149,8 @@ async function retrieveCanonicalQA(
         start_char: null,
         end_char: null,
         content_sha256: answerSha,
-        content: row.answer,
-        excerpt: row.answer.slice(0, 500),
+        excerpt: getExcerpt(row.answer, EXCERPT_MAX_CHARS),
+        ...(INCLUDE_CONTENT ? { content: row.answer } : {}),
         score
       } satisfies RetrievalSource;
     });
@@ -241,8 +270,8 @@ async function retrieveDocChunks(tenantId: string, query: string, topK: number):
         start_char: Number(row.start_char),
         end_char: Number(row.end_char),
         content_sha256: row.content_sha256,
-        content: row.content,
-        excerpt: row.content.slice(0, 500),
+        excerpt: getExcerpt(row.content, EXCERPT_MAX_CHARS),
+        ...(INCLUDE_CONTENT ? { content: row.content } : {}),
         score
       } satisfies RetrievalSource;
     });

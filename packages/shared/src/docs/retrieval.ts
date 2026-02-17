@@ -24,8 +24,8 @@ export interface RetrievalSource {
   start_char: number | null;
   end_char: number | null;
   content_sha256: string | null;
-  content: string;
   excerpt: string;
+  content?: string;
   score: number;
 }
 

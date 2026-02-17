@@ -24,6 +24,16 @@
 - Default: `5`
 - Max: `20`
 
+## Payload Defaults
+- Responses are excerpt-only by default.
+- `excerpt` is always present and capped to `800` chars by default.
+- `content` is omitted unless explicitly enabled for debugging.
+
+## Debugging
+- Set `RETRIEVAL_INCLUDE_CONTENT=true` to include full source `content` in response payloads.
+- Optionally set `RETRIEVAL_EXCERPT_MAX_CHARS=1200` (clamped `100..5000`) to increase excerpt size.
+- Production-safe default: leave both vars unset.
+
 ## Example Request
 ```bash
 curl -X POST http://localhost:3001/v1/retrieval/query \
@@ -48,7 +58,6 @@ curl -X POST http://localhost:3001/v1/retrieval/query \
       "start_char": null,
       "end_char": null,
       "content_sha256": "2df5f4f2f7fdbcb17e3ef4383fceec953cbfd12f8f3c0d6737f7a26e08d5f7b6",
-      "content": "Refunds are available up to 14 days before trip departure...",
       "excerpt": "Refunds are available up to 14 days before trip departure...",
       "score": 1
     }
