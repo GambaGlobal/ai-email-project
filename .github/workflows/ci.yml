@@ -46,7 +46,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
-        run: pnpm -w install --frozen-lockfile
+        run: pnpm -r install --frozen-lockfile
 
       - name: Detect quality gate commands
         id: detect-checks
