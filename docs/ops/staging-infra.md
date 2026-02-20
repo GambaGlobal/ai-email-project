@@ -1,6 +1,10 @@
-# Staging Infrastructure: Managed Postgres (Neon)
+# Staging Infrastructure Baseline
 
-## Default choice for staging
+Staging baseline services for this repo:
+- Postgres (Neon): see `docs/ops/staging-infra.md` section below.
+- Redis (Upstash): see `docs/ops/redis.md`.
+
+## Default choice for staging Postgres
 For staging, use **Neon** as the managed Postgres provider.
 
 Why Neon (briefly):
