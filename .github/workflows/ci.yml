@@ -3,35 +3,93 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   checks:
+    name: checks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js 20 (LTS)
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Enable pnpm via Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.29.2 --activate
+
+      - name: Resolve pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
         with:
-          version: 9
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
-      - name: Install
-        run: pnpm install --no-frozen-lockfile
+      - name: Install dependencies
+        run: pnpm -r install --frozen-lockfile
 
-      - name: Repo Check
-        run: pnpm -w repo:check
+      - name: Detect quality gate commands
+        id: detect-checks
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const scripts = pkg.scripts || {};
+          const commands = [];
+
+          if (scripts['repo:check']) {
+            commands.push('pnpm -w repo:check');
+          } else {
+            for (const scriptName of ['lint', 'typecheck', 'test', 'build']) {
+              if (scripts[scriptName]) {
+                commands.push(`pnpm -w ${scriptName}`);
+              }
+            }
+          }
+
+          if (commands.length === 0) {
+            console.error('No quality gate scripts found. Expected repo:check or one of lint/typecheck/test/build.');
+            process.exit(1);
+          }
+
+          const scriptPath = path.join(process.cwd(), '.ci-checks.sh');
+          fs.writeFileSync(scriptPath, ['set -euo pipefail', ...commands, ''].join('\n'));
+
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            console.error('GITHUB_OUTPUT is not set.');
+            process.exit(1);
+          }
+
+          fs.appendFileSync(outputPath, `commands<<EOF\n${commands.join('\n')}\nEOF\n`);
+          NODE
+
+      - name: Show selected quality gate commands
+        run: |
+          echo "CI will run:"
+          echo "${{ steps.detect-checks.outputs.commands }}"
+
+      - name: Run quality gate
+        run: bash ./.ci-checks.sh

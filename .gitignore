@@ -22,3 +22,8 @@ coverage/
 
 # Misc
 .DS_Store
+.tmp/
+.tmp/
+.pnpm-store/
+.pnpm-store
+**/*.tsbuildinfo

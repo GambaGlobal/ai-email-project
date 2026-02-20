@@ -2,8 +2,14 @@
   "name": "@ai-email/shared",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pipeline/ids": "./src/pipeline/ids.ts",
+    "./pipeline/ids-runtime": "./src/pipeline/ids-runtime.mjs"
   }
 }

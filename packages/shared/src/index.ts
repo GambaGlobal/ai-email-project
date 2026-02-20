@@ -1,30 +1,5 @@
-export type {
-  AttachmentMeta,
-  CanonicalDraft,
-  CanonicalMailbox,
-  CanonicalMessage,
-  CanonicalThread,
-  EmailAddress,
-  MailEvent,
-  MailProviderName,
-  MailboxId,
-  ProviderDraftId,
-  ProviderMailboxId,
-  ProviderMessageId,
-  ProviderThreadId,
-  TenantId
-} from "./mail/types";
-
-export type {
-  MailProvider,
-  MailProviderContext,
-  MailProviderWatchState
-} from "./mail/provider";
-
-export type {
-  MailProviderFactory,
-  MailProviderRegistry
-} from "./mail/registry";
+export * from "./mail";
+export * from "./docs";
 
 export type {
   AuditEvent,
@@ -40,14 +15,33 @@ export type {
   RunKey
 } from "./pipeline/types";
 
+export { asCorrelationId, newCorrelationId } from "./pipeline/ids";
+
 export {
   DEFAULT_RETRY_POLICY,
   MAIL_JOB_NAMES,
   QUEUE_NAMES,
+  STAGE_TO_QUEUE,
+  queueNameForStage,
   buildMailJobEnvelope
 } from "./queue/types";
 
 export type {
+  BackfillReplayPayload,
+  ClassifyPayload,
+  DraftGeneratePayload,
+  DraftWritebackPayload,
+  HistorySyncPayload,
+  JobEnvelope,
+  JobMeta,
+  JobStage,
   MailJobInput,
-  QueueName
+  NotificationIngestPayload,
+  QueueName,
+  StagePayloadMap,
+  StageToQueue,
+  ThreadFetchPayload
 } from "./queue/types";
+
+export * from "./telemetry";
+export * from "./reliability";

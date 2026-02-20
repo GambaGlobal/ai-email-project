@@ -1,4 +1,5 @@
-import type { MailProvider, MailProviderName } from "./provider";
+import type { MailProvider } from "./provider";
+import type { MailProviderName } from "./types";
 
 export type MailProviderFactory = (deps: {
   provider: MailProviderName;

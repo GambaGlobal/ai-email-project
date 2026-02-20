@@ -1,4 +1,4 @@
-# 0003 - Phase 2 — Architecture Lock (MailProvider + Event Pipeline)
+# DR-0007: Phase 2 — Architecture Lock (MailProvider + Event Pipeline)
 
 Status: Accepted
 Date: 2026-02-10
