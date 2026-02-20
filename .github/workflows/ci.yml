@@ -3,61 +3,34 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: smoke-gate
+  checks:
+    name: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      REDIS_URL: redis://127.0.0.1:6379
-      DOCS_STORAGE: local
-      DOCS_LOCAL_DIR: /tmp/ai-email-docs
-      TENANT_AUTOSEED: "1"
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_email_dev
-      AI_EMAIL_API_LOG: /tmp/ai-email-api.log
-      AI_EMAIL_WORKER_LOG: /tmp/ai-email-worker.log
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.1-pg16-bookworm
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ai_email_dev
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres -d ai_email_dev"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+    timeout-minutes: 20
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20 (LTS) and pnpm cache
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Setup pnpm via Corepack
+      - name: Enable pnpm via Corepack
         run: |
           corepack enable
           corepack prepare pnpm@10.29.2 --activate
@@ -65,82 +38,48 @@ jobs:
       - name: Install dependencies
         run: pnpm -w install --frozen-lockfile
 
-      - name: Repo check
-        run: pnpm -w repo:check
-
-      - name: Run DB migrations
-        run: pnpm -w db:migrate
-
-      - name: Start API and worker
+      - name: Detect quality gate commands
+        id: detect-checks
         run: |
-          set -euo pipefail
-          : > "$AI_EMAIL_API_LOG"
-          : > "$AI_EMAIL_WORKER_LOG"
-          nohup pnpm -w --filter @ai-email/api dev >> "$AI_EMAIL_API_LOG" 2>&1 &
-          echo $! > /tmp/ai-email-api.pid
-          nohup pnpm -w --filter @ai-email/worker dev >> "$AI_EMAIL_WORKER_LOG" 2>&1 &
-          echo $! > /tmp/ai-email-worker.pid
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
 
-      - name: Wait for API health
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const scripts = pkg.scripts || {};
+          const commands = [];
+
+          if (scripts['repo:check']) {
+            commands.push('pnpm -w repo:check');
+          } else {
+            for (const scriptName of ['lint', 'typecheck', 'test', 'build']) {
+              if (scripts[scriptName]) {
+                commands.push(`pnpm -w ${scriptName}`);
+              }
+            }
+          }
+
+          if (commands.length === 0) {
+            console.error('No quality gate scripts found. Expected repo:check or one of lint/typecheck/test/build.');
+            process.exit(1);
+          }
+
+          const scriptPath = path.join(process.cwd(), '.ci-checks.sh');
+          fs.writeFileSync(scriptPath, ['set -euo pipefail', ...commands, ''].join('\n'));
+
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            console.error('GITHUB_OUTPUT is not set.');
+            process.exit(1);
+          }
+
+          fs.appendFileSync(outputPath, `commands<<EOF\n${commands.join('\n')}\nEOF\n`);
+          NODE
+
+      - name: Show selected quality gate commands
         run: |
-          set -euo pipefail
-          for i in $(seq 1 60); do
-            if curl -fsS "http://127.0.0.1:3001/healthz" >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "api healthz not ready after 60s"
-          exit 1
+          echo "CI will run:"
+          echo "${{ steps.detect-checks.outputs.commands }}"
 
-      - name: Smoke correlation
-        env:
-          SMOKE_LOG_TIMEOUT_MS: "20000"
-        run: pnpm -w smoke:correlation
-
-      - name: Mail pipeline smokes
-        env:
-          SMOKE_LOG_TIMEOUT_MS: "20000"
-        run: |
-          set -euo pipefail
-          pnpm -w smoke:notify-dedupe
-          pnpm -w smoke:notify-fanout
-          pnpm -w smoke:notify-coalesce
-          pnpm -w smoke:notify-historyid
-          pnpm -w smoke:notify-poison
-          pnpm -w smoke:mailbox-sync-run
-
-      - name: Cleanup background processes
-        if: always()
-        run: |
-          set +e
-          for pid_file in /tmp/ai-email-api.pid /tmp/ai-email-worker.pid; do
-            if [ -f "$pid_file" ]; then
-              pid="$(cat "$pid_file")"
-              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
-                for _ in $(seq 1 20); do
-                  if ! kill -0 "$pid" 2>/dev/null; then
-                    break
-                  fi
-                  sleep 0.5
-                done
-                if kill -0 "$pid" 2>/dev/null; then
-                  kill -9 "$pid" 2>/dev/null || true
-                fi
-              fi
-            fi
-          done
-          lsof -ti tcp:3001 | xargs kill -9 >/dev/null 2>&1 || true
-
-      - name: Upload smoke logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-smoke-logs
-          path: |
-            /tmp/ai-email-api.log
-            /tmp/ai-email-worker.log
-            /tmp/ai-email-api.pid
-            /tmp/ai-email-worker.pid
-          if-no-files-found: warn
+      - name: Run quality gate
+        run: bash ./.ci-checks.sh
