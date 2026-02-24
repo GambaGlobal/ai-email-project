@@ -92,3 +92,33 @@ Evidence checklist:
 
 ## Cloud Run Cost Caps (4G.5)
 - Cloud Run cost caps are defined in [Cloud Run Cost Controls (Staging) — 4G.5](./cloud-run-cost-controls.md).
+
+## Required APIs Enabled (4.3)
+- Project: Ai-email-project (ai-email-project-488406)
+- Enabled for staging (Yes/No):
+  - Cloud Run API: No (enable later at deploy time)
+  - Cloud Build API: No (enable later with CI deploy)
+  - Artifact Registry API: Yes
+  - Secret Manager API: Yes
+  - Gmail API: Yes
+- Final enabled APIs observed (as of 2026-02-24):
+  - Artifact Registry API
+  - Cloud Logging API
+  - Cloud Monitoring API
+  - Gmail API
+  - IAM Service Account Credentials API
+  - Identity and Access Management (IAM) API
+  - Secret Manager API
+  - Service Management API
+  - Service Usage API
+- Disabled during cleanup:
+  - BigQuery APIs (and related), Analytics Hub, Dataplex, Dataform, Cloud SQL, Cloud Storage (and related), Cloud Trace, Cloud Datastore, Cloud Pub/Sub
+- Blocked from disabling (dependencies):
+  - None
+- Console click path:
+  - APIs & Services → Library (enable)
+  - APIs & Services → Enabled APIs & services (disable)
+- Evidence checklist:
+  - Final enabled list recorded
+  - Required APIs status recorded (Yes/No)
+  - Cleanup actions recorded

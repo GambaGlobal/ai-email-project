@@ -27,3 +27,5 @@ Billing is enabled for the staging project and attached to the billing account a
   - Project number recorded
   - Region decision recorded
   - IAM reviewed (no unexpected access)
+
+Step 4.3 enabled minimal required APIs; see [Required APIs Enabled (4.3)](./cost-guardrails.md#required-apis-enabled-43).
