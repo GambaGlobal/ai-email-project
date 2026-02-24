@@ -29,3 +29,4 @@ Billing is enabled for the staging project and attached to the billing account a
   - IAM reviewed (no unexpected access)
 
 Step 4.3 enabled minimal required APIs; see [Required APIs Enabled (4.3)](./cost-guardrails.md#required-apis-enabled-43).
+Step 4.4 GitHub deploy auth uses WIF; see [GitHub to GCP WIF (Staging) - 4.4](./gcp-wif-github.md).
