@@ -23,3 +23,20 @@ Evidence checklist:
 - Applies to shows “This billing account”
 - Thresholds show 50/90/100
 - Amount shows $10/month
+
+## Budget Alert Delivery (4G.3)
+- Budget: Staging
+- Delivery model: Role-based email (Billing Account admins and users)
+- Notification setting: “Email alerts to billing admins and users” enabled
+- Billing account: AI-email-project (012F1C-28E95A-488924)
+- Verified recipient role:
+  - Principal: designwithbrandon@gmail.com
+  - Role: Billing Account Administrator
+- Console paths:
+  - Billing → Budgets & alerts → Staging → Notifications
+  - Billing → Account management → Manage users (billing account) → add/verify principal role
+
+Evidence checklist:
+- Alerts enabled for billing admins/users
+- User verified as Billing Account Administrator on the billing account
+- Budget still shows thresholds 50/90/100 and appears in Budgets & alerts list
