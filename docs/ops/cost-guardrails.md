@@ -54,3 +54,38 @@ Evidence checklist:
   - Logs auto-expire quickly so staging doesn’t accumulate paid log storage over time.
 - Evidence checklist:
   - Bucket details page shows Retention period = 7 days
+
+## Enabled Services Policy (4G.6)
+- Project: Ai-email-project (ai-email-project-488406)
+- Minimal allowed set (early staging): Cloud Run, Cloud Build, Artifact Registry, Secret Manager, Gmail API (+ core dependencies)
+- Observed enabled services (as of 2026-02-24):
+  - Analytics Hub API
+  - BigQuery API
+  - BigQuery Connection API
+  - BigQuery Data Policy API
+  - BigQuery Data Transfer API
+  - BigQuery Migration API
+  - BigQuery Reservation API
+  - BigQuery Storage API
+  - Cloud Dataplex API
+  - Cloud Datastore API
+  - Cloud Logging API
+  - Cloud Monitoring API
+  - Cloud SQL
+  - Cloud Storage
+  - Cloud Storage API
+  - Cloud Trace API
+  - Dataform API
+  - Google Cloud APIs
+  - Google Cloud Storage JSON API
+  - Service Management API
+  - Service Usage API
+- Services disabled during audit:
+  - None
+- Console click path:
+  - APIs & Services → Enabled APIs & services
+- Plain-English meaning:
+  - Fewer enabled services = fewer surprise charges and fewer accidental dependencies.
+- Evidence checklist:
+  - Observed list recorded
+  - Services disabled recorded as “None”
