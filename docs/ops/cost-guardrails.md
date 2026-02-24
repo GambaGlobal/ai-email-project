@@ -40,3 +40,17 @@ Evidence checklist:
 - Alerts enabled for billing admins/users
 - User verified as Billing Account Administrator on the billing account
 - Budget still shows thresholds 50/90/100 and appears in Budgets & alerts list
+
+## Cloud Logging Retention (4G.4)
+- Project: Ai-email-project (ai-email-project-488406)
+- Bucket: _Default (Default bucket)
+- Retention period: 7 days
+- Region: global
+- Log Analytics: Disabled
+- BigQuery analysis: Disabled
+- Console click path:
+  - Logging → Logs Storage → Log buckets → _Default → Retention period → set to 7 days → Save
+- Plain-English meaning:
+  - Logs auto-expire quickly so staging doesn’t accumulate paid log storage over time.
+- Evidence checklist:
+  - Bucket details page shows Retention period = 7 days
