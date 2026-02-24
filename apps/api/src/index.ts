@@ -24,9 +24,12 @@ async function main() {
     }
   });
 
-  app.get("/healthz", async () => {
+  const healthHandler = async () => {
     return { ok: true, service: "api", ts: new Date().toISOString() };
-  });
+  };
+
+  app.get("/health", healthHandler);
+  app.get("/healthz", healthHandler);
 
   await app.register(gmailAuthRoutes);
   await app.register(gmailConnectionRoutes);
