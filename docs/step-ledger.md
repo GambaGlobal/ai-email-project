@@ -4,6 +4,7 @@ Use `SELF` in the Commit/PR column for the commit that implements the step.
 
 | Step ID | Date | Commit/PR | Summary | Notes |
 | --- | --- | --- | --- | --- |
+| 4.6 | 2026-02-24 | SELF | Added Cloud Run staging API deploy workflow (WIF + Cloud Build + Artifact Registry), API container support, `/health` endpoint alias, and ops docs for cost caps + secret mapping evidence. | Evidence: `pnpm -w repo:check`. |
 | 1.1 | 2026-02-09 | 255ba44 | Add governance artifacts (AGENTS, decisions, ledger). |  |
 | 1.6 | 2026-02-09 | SELF | Add local infra compose, env examples, and docs. |  |
 | 1.5 | 2026-02-09 | 837b639 | Add GitHub Actions CI checks for repo safety rails. |  |
