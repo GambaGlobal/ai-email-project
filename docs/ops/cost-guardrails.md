@@ -89,3 +89,6 @@ Evidence checklist:
 - Evidence checklist:
   - Observed list recorded
   - Services disabled recorded as “None”
+
+## Cloud Run Cost Caps (4G.5)
+- Cloud Run cost caps are defined in [Cloud Run Cost Controls (Staging) — 4G.5](./cloud-run-cost-controls.md).
