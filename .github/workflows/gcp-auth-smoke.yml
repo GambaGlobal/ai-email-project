@@ -1,0 +1,31 @@
+name: gcp-auth-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  auth-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Auth smoke check
+        run: |
+          gcloud auth list
+          gcloud projects describe ai-email-project-488406 --format="value(projectId)"
+
