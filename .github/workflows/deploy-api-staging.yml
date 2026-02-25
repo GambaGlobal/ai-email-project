@@ -131,6 +131,25 @@ jobs:
             --member "serviceAccount:github-deploy-staging@ai-email-project-488406.iam.gserviceaccount.com" \
             --role "roles/run.invoker"
 
+      - name: Assert staging is not public
+        run: |
+          set -euo pipefail
+          POLICY_JSON="$(gcloud run services get-iam-policy "${CLOUD_RUN_SERVICE}" --region "${GCP_REGION}" --format=json)"
+
+          # Fail if allUsers has run.invoker
+          echo "${POLICY_JSON}" | grep -q '"allUsers"' && echo "${POLICY_JSON}" | grep -q '"roles/run.invoker"' && {
+            echo "ERROR: Service is publicly invokable (allUsers has roles/run.invoker)."
+            exit 1
+          } || true
+
+          # Fail if allAuthenticatedUsers has run.invoker (optional but recommended)
+          echo "${POLICY_JSON}" | grep -q '"allAuthenticatedUsers"' && echo "${POLICY_JSON}" | grep -q '"roles/run.invoker"' && {
+            echo "ERROR: Service is invokable by allAuthenticatedUsers (not dark)."
+            exit 1
+          } || true
+
+          echo "OK: staging is not public."
+
       - name: Resolve service URL
         id: service_url
         run: |
