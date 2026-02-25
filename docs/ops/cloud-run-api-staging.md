@@ -5,6 +5,8 @@
 - Region: `us-east1`
 - GitHub Actions workflow: `.github/workflows/deploy-api-staging.yml`
 - Trigger: manual (`workflow_dispatch`)
+- Required APIs are enabled manually in GCP Console.
+- The workflow does not run `gcloud services enable` to keep WIF least-privilege.
 
 ## Cost Cap Settings
 Configured in deploy command:

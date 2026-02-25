@@ -39,13 +39,6 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - name: Enable required APIs
-        run: |
-          gcloud services enable \
-            run.googleapis.com \
-            cloudbuild.googleapis.com \
-            artifactregistry.googleapis.com
-
       - name: Ensure Artifact Registry repository exists
         run: |
           gcloud artifacts repositories describe "${ARTIFACT_REPO}" \
