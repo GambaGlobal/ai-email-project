@@ -54,10 +54,7 @@ jobs:
       - name: Build and push image
         run: |
           set -euo pipefail
-          echo "GITHUB_SHA=$GITHUB_SHA"
-          echo "GITHUB_REF=$GITHUB_REF"
-          IMAGE_URI="us-east1-docker.pkg.dev/ai-email-project-488406/ai-email-staging/api:${GITHUB_SHA}"
-          echo "IMAGE_URI=${IMAGE_URI}"
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${GITHUB_SHA}"
           echo "Submitting Cloud Build..."
           BUILD_ID="$(gcloud builds submit . \
             --config apps/api/cloudbuild.yaml \
@@ -65,10 +62,8 @@ jobs:
             --async \
             --quiet \
             --format='value(id)')"
-          echo "Captured BUILD_ID='${BUILD_ID}'"
           if [[ -z "${BUILD_ID}" ]]; then
-            echo "ERROR: BUILD_ID empty. Re-running submit in --format=json for diagnosis..."
-            gcloud builds submit . --config apps/api/cloudbuild.yaml --substitutions=_IMAGE_URI="${IMAGE_URI}" --async --format=json
+            echo "ERROR: BUILD_ID empty. gcloud builds submit did not return an id."
             exit 1
           fi
 
@@ -116,7 +111,7 @@ jobs:
             --region "${GCP_REGION}" \
             --platform managed \
             --service-account github-deploy-staging@ai-email-project-488406.iam.gserviceaccount.com \
-            --allow-unauthenticated \
+            --no-allow-unauthenticated \
             --ingress all \
             --port 8080 \
             --cpu 1 \
@@ -129,12 +124,20 @@ jobs:
             --set-env-vars "NODE_ENV=production,HOST=0.0.0.0,S3_REGION=us-east1,S3_BUCKET=ai-email-staging-docs" \
             --update-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,TOKEN_ENCRYPTION_KEY=TOKEN_ENCRYPTION_KEY:latest,ADMIN_BASE_URL=ADMIN_PUBLIC_URL:latest"
 
+      - name: Ensure deploy SA can invoke service
+        run: |
+          gcloud run services add-iam-policy-binding "${CLOUD_RUN_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --member "serviceAccount:github-deploy-staging@ai-email-project-488406.iam.gserviceaccount.com" \
+            --role "roles/run.invoker"
+
       - name: Verify /health
         env:
           GCP_REGION: ${{ env.GCP_REGION }}
           CLOUD_RUN_SERVICE: ${{ env.CLOUD_RUN_SERVICE }}
         run: |
           SERVICE_URL="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --region "${GCP_REGION}" --format='value(status.url)')"
+          TOKEN="$(gcloud auth print-identity-token)"
           echo "Service URL: ${SERVICE_URL}"
-          curl --fail --show-error --silent "${SERVICE_URL}/health" >/dev/null
+          curl --fail --show-error --silent -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health" >/dev/null
           echo "Health check passed: ${SERVICE_URL}/health"
