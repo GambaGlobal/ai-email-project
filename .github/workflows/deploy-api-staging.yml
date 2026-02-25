@@ -1,0 +1,99 @@
+name: Deploy API Staging (Cloud Run)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-api-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: ai-email-project-488406
+  GCP_REGION: us-east1
+  CLOUD_RUN_SERVICE: ai-email-api-staging
+  ARTIFACT_REPO: ai-email-staging
+  IMAGE_NAME: api
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Enable required APIs
+        run: |
+          gcloud services enable \
+            run.googleapis.com \
+            cloudbuild.googleapis.com \
+            artifactregistry.googleapis.com
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          gcloud artifacts repositories describe "${ARTIFACT_REPO}" \
+            --location "${GCP_REGION}" >/dev/null 2>&1 || \
+          gcloud artifacts repositories create "${ARTIFACT_REPO}" \
+            --repository-format docker \
+            --location "${GCP_REGION}" \
+            --description "Staging images for AI Email Project"
+
+      - name: Configure docker auth for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        env:
+          IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          gcloud builds submit \
+            --tag "${IMAGE_URI}" \
+            --file apps/api/Dockerfile \
+            .
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --image "${IMAGE_URI}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --ingress all \
+            --port 8080 \
+            --cpu 1 \
+            --cpu-throttling \
+            --memory 256Mi \
+            --concurrency 1 \
+            --timeout 300 \
+            --min-instances 0 \
+            --max-instances 1 \
+            --set-env-vars "NODE_ENV=production,HOST=0.0.0.0,S3_REGION=us-east1,S3_BUCKET=ai-email-staging-docs" \
+            --update-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,TOKEN_ENCRYPTION_KEY=TOKEN_ENCRYPTION_KEY:latest,ADMIN_BASE_URL=ADMIN_PUBLIC_URL:latest"
+
+      - name: Verify /health
+        env:
+          GCP_REGION: ${{ env.GCP_REGION }}
+          CLOUD_RUN_SERVICE: ${{ env.CLOUD_RUN_SERVICE }}
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --region "${GCP_REGION}" --format='value(status.url)')"
+          echo "Service URL: ${SERVICE_URL}"
+          curl --fail --show-error --silent "${SERVICE_URL}/health" >/dev/null
+          echo "Health check passed: ${SERVICE_URL}/health"
