@@ -39,7 +39,7 @@ async function main() {
   await app.register(retrievalRoutes);
   await app.register(generatePreviewRoutes);
 
-  const port = Number(process.env.PORT ?? 3001);
+  const port = Number(process.env.PORT ?? 8080);
   const host = process.env.HOST ?? "0.0.0.0";
 
   try {

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "./node_modules/.bin/tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
