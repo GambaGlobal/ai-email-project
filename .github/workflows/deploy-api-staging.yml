@@ -115,6 +115,7 @@ jobs:
             --image "${IMAGE_URI}" \
             --region "${GCP_REGION}" \
             --platform managed \
+            --service-account github-deploy-staging@ai-email-project-488406.iam.gserviceaccount.com \
             --allow-unauthenticated \
             --ingress all \
             --port 8080 \
