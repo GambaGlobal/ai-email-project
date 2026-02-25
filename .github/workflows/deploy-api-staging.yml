@@ -58,15 +58,16 @@ jobs:
           set -euo pipefail
           echo "GITHUB_SHA=$GITHUB_SHA"
           echo "GITHUB_REF=$GITHUB_REF"
+          echo "Submitting Cloud Build..."
           BUILD_ID="$(gcloud builds submit . \
             --config apps/api/cloudbuild.yaml \
             --async \
             --quiet \
-            --format='value(id)' \
-            2>/dev/null)"
+            --format='value(id)')"
           echo "Captured BUILD_ID='${BUILD_ID}'"
           if [[ -z "${BUILD_ID}" ]]; then
-            echo "ERROR: BUILD_ID was empty. gcloud builds submit did not return an id."
+            echo "ERROR: BUILD_ID empty. Re-running submit in --format=json for diagnosis..."
+            gcloud builds submit . --config apps/api/cloudbuild.yaml --async --format=json
             exit 1
           fi
 
