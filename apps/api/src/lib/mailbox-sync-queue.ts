@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
-import { DEFAULT_BULLMQ_JOB_OPTIONS } from "@ai-email/shared";
+import { DEFAULT_BULLMQ_JOB_OPTIONS } from "./shared-runtime.js";
 
 export const MAILBOX_SYNC_QUEUE = "mailbox_sync";
 const MAILBOX_SYNC_JOB = "mailbox.sync";

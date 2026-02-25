@@ -1,12 +1,12 @@
 import type { PoolClient } from "pg";
 import {
-  CITATION_CONTRACT_VERSION,
   type CitationPayload,
   type CitationSourceCanonicalQA,
   type CitationSourceDocChunk
 } from "@ai-email/shared";
 import { withTenantClient } from "./db.js";
 import { embedTexts } from "./openai-embeddings.js";
+import { CITATION_CONTRACT_VERSION } from "./shared-runtime.js";
 
 const DEFAULT_TOP_K = 5;
 const MAX_TOP_K = 20;

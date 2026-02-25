@@ -6,7 +6,7 @@ import {
   isGlobalMailboxSyncDisabled,
   isGlobalMailNotificationsDisabled,
   newCorrelationId
-} from "@ai-email/shared";
+} from "../lib/shared-runtime.js";
 import { queryOne, queryRowsGlobal, withTenantClient } from "../lib/db.js";
 import {
   enqueueMailNotification,

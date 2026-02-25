@@ -5,7 +5,7 @@ import {
   asCorrelationId,
   isGlobalDocsIngestionDisabled,
   newCorrelationId
-} from "@ai-email/shared";
+} from "../lib/shared-runtime.js";
 import { resolveTenantIdFromHeader } from "../lib/tenant.js";
 import { queryOne, withTenantClient } from "../lib/db.js";
 import {

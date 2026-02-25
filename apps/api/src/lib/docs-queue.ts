@@ -8,9 +8,9 @@ import {
   docsVersionIndexingJobId,
   docsIngestionJobId,
   docsVersionIngestionJobId,
-  newCorrelationId,
-  type CorrelationId
-} from "@ai-email/shared";
+  newCorrelationId
+} from "./shared-runtime.js";
+import type { CorrelationId } from "@ai-email/shared";
 
 const DOCS_INGESTION_QUEUE = "docs_ingestion";
 const DOCS_INGESTION_JOB = "docs.ingest";
