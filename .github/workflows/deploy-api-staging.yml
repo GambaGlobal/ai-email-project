@@ -56,22 +56,20 @@ jobs:
           IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
           set -euo pipefail
-          SUBMIT_LOG="$(mktemp)"
-
-          gcloud builds submit \
+          BUILD_ID="$(gcloud builds submit \
             --async \
+            --format='value(id)' \
             --config apps/api/cloudbuild.yaml \
             --substitutions=_IMAGE_URI="${IMAGE_URI}" \
-            . | tee "${SUBMIT_LOG}"
-
-          BUILD_ID="$(grep -Eo 'builds/[A-Za-z0-9-]+' "${SUBMIT_LOG}" | tail -n1 | cut -d/ -f2)"
+            .)"
           if [ -z "${BUILD_ID}" ]; then
-            echo "Failed to parse Cloud Build ID from submit output."
+            echo "Cloud Build submit succeeded but returned an empty build ID."
             exit 1
           fi
 
-          echo "Submitted Cloud Build ID: ${BUILD_ID}"
+          echo "Build submitted: ${BUILD_ID}"
           echo "BUILD_ID=${BUILD_ID}" >> "${GITHUB_ENV}"
+          echo "build_id=${BUILD_ID}" >> "${GITHUB_OUTPUT}"
 
       - name: Wait for Cloud Build
         run: |
