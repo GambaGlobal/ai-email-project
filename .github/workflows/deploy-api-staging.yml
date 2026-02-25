@@ -56,8 +56,8 @@ jobs:
           IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
           gcloud builds submit \
-            --tag "${IMAGE_URI}" \
-            --file apps/api/Dockerfile \
+            --config apps/api/cloudbuild.yaml \
+            --substitutions=_IMAGE_URI="${IMAGE_URI}" \
             .
 
       - name: Deploy to Cloud Run
