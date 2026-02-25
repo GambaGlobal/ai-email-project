@@ -55,11 +55,55 @@ jobs:
         env:
           IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
+          set -euo pipefail
+          SUBMIT_LOG="$(mktemp)"
+
           gcloud builds submit \
-            --no-log-streaming \
+            --async \
             --config apps/api/cloudbuild.yaml \
             --substitutions=_IMAGE_URI="${IMAGE_URI}" \
-            .
+            . | tee "${SUBMIT_LOG}"
+
+          BUILD_ID="$(grep -Eo 'builds/[A-Za-z0-9-]+' "${SUBMIT_LOG}" | tail -n1 | cut -d/ -f2)"
+          if [ -z "${BUILD_ID}" ]; then
+            echo "Failed to parse Cloud Build ID from submit output."
+            exit 1
+          fi
+
+          echo "Submitted Cloud Build ID: ${BUILD_ID}"
+          echo "BUILD_ID=${BUILD_ID}" >> "${GITHUB_ENV}"
+
+      - name: Wait for Cloud Build
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BUILD_ID:-}" ]; then
+            echo "BUILD_ID is not set."
+            exit 1
+          fi
+
+          deadline=$((SECONDS + 1200))
+          while true; do
+            STATUS="$(gcloud builds describe "${BUILD_ID}" --format='value(status)')"
+            echo "Cloud Build ${BUILD_ID} status: ${STATUS}"
+
+            case "${STATUS}" in
+              SUCCESS)
+                break
+                ;;
+              FAILURE|CANCELLED|TIMEOUT)
+                echo "Cloud Build ended with status: ${STATUS}"
+                exit 1
+                ;;
+            esac
+
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "Timed out waiting for Cloud Build ${BUILD_ID} after 20 minutes."
+              exit 1
+            fi
+
+            sleep 10
+          done
 
       - name: Deploy to Cloud Run
         env:
