@@ -7,7 +7,7 @@ RUN corepack enable && corepack prepare pnpm@10.29.2 --activate
 
 WORKDIR /app
 
-FROM base AS build-deps
+FROM base AS deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json turbo.json ./
 COPY apps/api/package.json apps/api/package.json
@@ -15,21 +15,13 @@ COPY packages/shared/package.json packages/shared/package.json
 
 RUN pnpm install --frozen-lockfile --filter @ai-email/api...
 
-FROM build-deps AS build
+FROM deps AS build
 
 COPY apps/api ./apps/api
 COPY packages/shared ./packages/shared
 
 RUN pnpm --filter @ai-email/api build \
   && pnpm --filter @ai-email/shared exec tsc -p tsconfig.json --noEmit false --outDir dist --rootDir src
-
-FROM base AS prod-deps
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json turbo.json ./
-COPY apps/api/package.json apps/api/package.json
-COPY packages/shared/package.json packages/shared/package.json
-
-RUN pnpm install --frozen-lockfile --prod --filter @ai-email/api...
 
 FROM base AS runner
 
@@ -39,7 +31,9 @@ ENV PORT="8080"
 
 WORKDIR /app
 
-COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/api/package.json ./apps/api/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
