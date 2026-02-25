@@ -3,6 +3,12 @@
 Staging baseline services for this repo:
 - Postgres (Neon): see `docs/ops/staging-infra.md` section below.
 - Redis (Upstash): see `docs/ops/redis.md`.
+- Admin UI (Vercel): see `docs/ops/vercel-admin.md`.
+
+## Admin (Vercel)
+
+- A staging Vercel project for Admin exists.
+- Admin deployment runbook and env inventory are documented in `docs/ops/vercel-admin.md`.
 
 ## Default choice for staging Postgres
 For staging, use **Neon** as the managed Postgres provider.

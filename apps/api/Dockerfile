@@ -15,6 +15,20 @@ COPY packages/shared/package.json packages/shared/package.json
 
 RUN pnpm install --frozen-lockfile --filter @ai-email/api...
 
+FROM deps AS build
+
+COPY apps/api ./apps/api
+COPY packages/shared ./packages/shared
+
+RUN pnpm --filter @ai-email/api build \
+  && pnpm --filter @ai-email/shared exec tsc -p tsconfig.json --noEmit false --outDir dist --rootDir src
+
+RUN sed -i 's|\"\\.\": \"\\./src/index.ts\"|\".\": \"./dist/index.js\"|' ./packages/shared/package.json
+
+FROM build AS deploy
+
+RUN pnpm --filter @ai-email/api deploy --legacy --prod /out
+
 FROM base AS runner
 
 ENV NODE_ENV="production"
@@ -23,11 +37,8 @@ ENV PORT="8080"
 
 WORKDIR /app
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
-COPY apps/api ./apps/api
-COPY packages/shared ./packages/shared
+COPY --from=deploy /out ./
 
 EXPOSE 8080
 
-CMD ["pnpm", "--filter", "@ai-email/api", "exec", "tsx", "src/index.ts"]
+CMD ["node", "dist/index.js"]

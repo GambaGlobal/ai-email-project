@@ -3,9 +3,9 @@ import IORedis from "ioredis";
 import {
   DEFAULT_BULLMQ_JOB_OPTIONS,
   asCorrelationId,
-  newCorrelationId,
-  type CorrelationId
-} from "@ai-email/shared";
+  newCorrelationId
+} from "./shared-runtime.js";
+import type { CorrelationId } from "@ai-email/shared";
 
 export const MAIL_NOTIFICATIONS_QUEUE = "mail_notifications";
 const MAIL_NOTIFICATION_JOB = "mail.notification";
