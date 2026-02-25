@@ -131,16 +131,27 @@ jobs:
             --member "serviceAccount:github-deploy-staging@ai-email-project-488406.iam.gserviceaccount.com" \
             --role "roles/run.invoker"
 
-      - name: Verify /health
-        env:
-          GCP_REGION: ${{ env.GCP_REGION }}
-          CLOUD_RUN_SERVICE: ${{ env.CLOUD_RUN_SERVICE }}
+      - name: Resolve service URL
+        id: service_url
         run: |
           SERVICE_URL="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --region "${GCP_REGION}" --format='value(status.url)')"
-          TOKEN="$(gcloud auth print-identity-token --audiences="${SERVICE_URL}" 2>/dev/null || true)"
-          if [[ -z "${TOKEN}" ]]; then
-            TOKEN="$(gcloud auth print-access-token)"
-          fi
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint ID token for health check
+        id: auth_health
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service_url.outputs.service_url }}
+          id_token_include_email: true
+
+      - name: Verify /health
+        env:
+          SERVICE_URL: ${{ steps.service_url.outputs.service_url }}
+          TOKEN: ${{ steps.auth_health.outputs.id_token }}
+        run: |
           echo "Service URL: ${SERVICE_URL}"
           curl --fail --show-error --silent -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health" >/dev/null
           echo "Health check passed: ${SERVICE_URL}/health"
