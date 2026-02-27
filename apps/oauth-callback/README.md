@@ -2,6 +2,10 @@
 
 Purpose: Public OAuth bridge that forwards Gmail start/callback requests to private API with Cloud Run ID token auth.
 
+Required env vars:
+- `API_PUBLIC_URL` (preferred) or `API_BASE_URL` (alias)
+- `ADMIN_PUBLIC_URL` (preferred) or `ADMIN_BASE_URL` (alias)
+
 Routes:
 - `GET /v1/auth/gmail/start`
 - `GET /v1/auth/gmail/callback`
