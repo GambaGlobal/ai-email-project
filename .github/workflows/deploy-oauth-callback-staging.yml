@@ -18,7 +18,7 @@ env:
   API_CLOUD_RUN_SERVICE: ai-email-api-staging
   ARTIFACT_REPO: ai-email-staging
   IMAGE_NAME: oauth-callback
-  OAUTH_CALLBACK_RUNTIME_SA: cloudrun-oauth-callback-staging-runtime@ai-email-project-488406.iam.gserviceaccount.com
+  OAUTH_CALLBACK_RUNTIME_SA: cr-oauthcb-stg-rt@ai-email-project-488406.iam.gserviceaccount.com
 
 jobs:
   deploy:

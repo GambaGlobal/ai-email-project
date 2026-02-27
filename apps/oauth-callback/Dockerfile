@@ -11,6 +11,7 @@ FROM base AS deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json turbo.json ./
 COPY apps/oauth-callback/package.json apps/oauth-callback/package.json
+COPY packages/shared/package.json packages/shared/package.json
 
 RUN pnpm install --frozen-lockfile --filter @ai-email/oauth-callback...
 
