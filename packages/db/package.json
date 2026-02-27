@@ -9,7 +9,9 @@
     "db:create": "node-pg-migrate -c migrate.config.cjs create"
   },
   "dependencies": {
-    "node-pg-migrate": "^7.9.0",
     "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "node-pg-migrate": "^7.9.1"
   }
 }
