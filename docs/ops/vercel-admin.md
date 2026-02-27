@@ -64,12 +64,25 @@ Result summary:
   - `apps/admin/app/system-health/page.tsx`
   - `apps/admin/app/components/docs-manager.tsx`
 - Likely purpose:
-  - Base URL for API calls like `/v1/auth/gmail/start`, `/v1/mail/gmail/connection`, `/v1/docs`.
+  - Base URL for API calls like `/v1/mail/gmail/connection`, `/v1/docs`.
 - Build/runtime requirement (best effort):
   - Not hard-required for a successful build.
   - Required for real API mode at runtime; without it, UI falls back to offline/demo behavior.
 - Placeholder value pattern:
   - `https://<staging-api-domain>`
+
+### `NEXT_PUBLIC_OAUTH_BRIDGE_URL`
+
+- Exposure: `NEXT_PUBLIC` (client-exposed at build output).
+- Usage context:
+  - `apps/admin/app/onboarding/page.tsx`
+- Likely purpose:
+  - Public OAuth bridge base URL for Gmail connect start flow (`/v1/auth/gmail/start`) while API stays private.
+- Build/runtime requirement (best effort):
+  - Optional but recommended for staging/private API setup.
+  - If not set, onboarding connect flow falls back to `NEXT_PUBLIC_API_BASE_URL`.
+- Placeholder value pattern:
+  - `https://<oauth-callback-cloud-run-url>`
 
 ### `NEXT_PUBLIC_TENANT_ID`
 
@@ -91,6 +104,7 @@ Result summary:
 In Vercel project `ai-email-admin-staging`, add:
 
 - `NEXT_PUBLIC_API_BASE_URL=https://<staging-api-domain>`
+- `NEXT_PUBLIC_OAUTH_BRIDGE_URL=https://<oauth-callback-cloud-run-url>`
 - `NEXT_PUBLIC_TENANT_ID=<staging-tenant-id>`
 
 Apply to environments:

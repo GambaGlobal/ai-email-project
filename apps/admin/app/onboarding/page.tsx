@@ -14,6 +14,7 @@ const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
 // Optional admin env wiring for real OAuth connect:
 // NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+const OAUTH_BRIDGE_URL = process.env.NEXT_PUBLIC_OAUTH_BRIDGE_URL;
 const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
@@ -182,6 +183,7 @@ export default function OnboardingPage() {
   });
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
+  const hasRealOAuthStartUrl = Boolean(OAUTH_BRIDGE_URL ?? API_BASE_URL);
   const hasTenantIdForRealApi = Boolean(API_TENANT_ID);
   const connectTimeoutRef = useRef<number | null>(null);
   const testTimeoutRef = useRef<number | null>(null);
@@ -215,10 +217,18 @@ export default function OnboardingPage() {
   };
 
   useEffect(() => {
-    const storedConnectionState = window.localStorage.getItem(GMAIL_CONNECTION_STATE_KEY);
+    const hasRealStatusSource = Boolean(API_BASE_URL && API_TENANT_ID);
     const storedLastVerified = window.localStorage.getItem(GMAIL_LAST_VERIFIED_KEY);
-    setGmailConnectionState(parseConnectionState(storedConnectionState));
-    setLastVerifiedAt(storedLastVerified);
+
+    if (hasRealStatusSource) {
+      setGmailConnectionState("disconnected");
+      setLastVerifiedAt(null);
+    } else {
+      const storedConnectionState = window.localStorage.getItem(GMAIL_CONNECTION_STATE_KEY);
+      setGmailConnectionState(parseConnectionState(storedConnectionState));
+      setLastVerifiedAt(storedLastVerified);
+    }
+
     refreshDraftSignals();
   }, []);
 
@@ -393,15 +403,32 @@ export default function OnboardingPage() {
   };
 
   const startRealConnectFlow = () => {
-    if (!API_BASE_URL || !API_TENANT_ID) {
+    const oauthBaseUrl = OAUTH_BRIDGE_URL ?? API_BASE_URL;
+    if (!oauthBaseUrl || !API_TENANT_ID) {
       return;
     }
 
-    const startUrl = new URL("/v1/auth/gmail/start", API_BASE_URL);
+    const startUrl = new URL("/v1/auth/gmail/start", oauthBaseUrl);
     startUrl.searchParams.set("tenant_id", API_TENANT_ID);
     startUrl.searchParams.set("return_to", "/onboarding");
     window.location.assign(startUrl.toString());
   };
+
+  useEffect(() => {
+    if (!API_BASE_URL || !API_TENANT_ID) {
+      return;
+    }
+
+    const query = new URLSearchParams(window.location.search);
+    const gmailResult = query.get("gmail");
+
+    if (gmailResult === "error") {
+      setGmailConnectionState("error");
+      return;
+    }
+
+    void refreshRealConnectionStatus();
+  }, []);
 
   const renderConnectPanel = () => {
     const lastVerifiedLabel = formatLastVerified(lastVerifiedAt);
@@ -429,7 +456,7 @@ export default function OnboardingPage() {
             <strong>Last verified:</strong> {lastVerifiedLabel}
           </p>
           <div className="onboarding-actions">
-            {API_BASE_URL ? (
+            {hasRealOAuthStartUrl ? (
               <button
                 type="button"
                 onClick={refreshRealConnectionStatus}
@@ -459,9 +486,13 @@ export default function OnboardingPage() {
           <p className="gmail-helper">
             Access expired. Reconnect Gmail to continue generating drafts.
           </p>
-          {API_BASE_URL ? (
+          {hasRealOAuthStartUrl ? (
             <div className="onboarding-actions">
-              <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
+              <button
+                type="button"
+                onClick={startRealConnectFlow}
+                disabled={!hasTenantIdForRealApi}
+              >
                 Reconnect Gmail (real)
               </button>
               <button
@@ -489,7 +520,7 @@ export default function OnboardingPage() {
             We could not verify Gmail access. Please try again in a moment.
           </p>
           <div className="onboarding-actions">
-            {API_BASE_URL ? (
+            {hasRealOAuthStartUrl ? (
               <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
                 Try again (real)
               </button>
@@ -523,7 +554,7 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
           Connect Gmail so we can read thread context and create drafts in Gmail. We never
           auto-send.
         </p>
-        {API_BASE_URL ? (
+        {hasRealOAuthStartUrl ? (
           <div className="onboarding-actions">
             <button type="button" onClick={startRealConnectFlow} disabled={!hasTenantIdForRealApi}>
               Connect Gmail (real)
@@ -650,7 +681,7 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
     return (
       <>
         {renderConnectPanel()}
-        {!API_BASE_URL ? (
+        {!hasRealOAuthStartUrl ? (
           <details className="onboarding-dev-controls">
             <summary>Developer controls (UX mock only)</summary>
             <div className="onboarding-dev-actions">
@@ -676,7 +707,7 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
             </div>
           </details>
         ) : null}
-        {API_BASE_URL && !hasTenantIdForRealApi ? (
+        {hasRealOAuthStartUrl && !hasTenantIdForRealApi ? (
           <p className="onboarding-note">
             Set NEXT_PUBLIC_TENANT_ID to enable real connection status checks.
           </p>

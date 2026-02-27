@@ -22,6 +22,26 @@ function asSingle(value: string | string[] | undefined): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function appendQueryParams(
+  targetUrl: URL,
+  query: Record<string, string | string[] | undefined>
+): void {
+  for (const [key, rawValue] of Object.entries(query)) {
+    if (typeof rawValue === "string") {
+      targetUrl.searchParams.append(key, rawValue);
+      continue;
+    }
+
+    if (Array.isArray(rawValue)) {
+      for (const item of rawValue) {
+        if (typeof item === "string") {
+          targetUrl.searchParams.append(key, item);
+        }
+      }
+    }
+  }
+}
+
 async function main() {
   const apiBaseUrl = requiredEnv("API_BASE_URL");
   const adminBaseUrl = requiredEnv("ADMIN_BASE_URL");
@@ -72,6 +92,42 @@ async function main() {
         return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
       } catch (error) {
         request.log.error({ error }, "gmail oauth callback bridge: forwarding failed");
+        return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
+      }
+    }
+  );
+
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    "/v1/auth/gmail/start",
+    async (request, reply) => {
+      try {
+        const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
+        const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
+
+        const privateStart = new URL("/v1/auth/gmail/start", apiBaseUrl);
+        appendQueryParams(privateStart, request.query);
+
+        const response = await fetch(privateStart.toString(), {
+          method: "GET",
+          headers: {
+            Authorization: String(tokenHeaders.Authorization ?? "")
+          },
+          redirect: "manual"
+        });
+
+        const location = response.headers.get("location");
+        if (location && response.status >= 300 && response.status < 400) {
+          request.log.info("gmail oauth start bridge: private start redirect forwarded");
+          return reply.redirect(302, location);
+        }
+
+        request.log.warn(
+          { statusCode: response.status },
+          "gmail oauth start bridge: unexpected private start response"
+        );
+        return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
+      } catch (error) {
+        request.log.error({ error }, "gmail oauth start bridge: forwarding failed");
         return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
       }
     }
