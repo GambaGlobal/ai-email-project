@@ -5,8 +5,11 @@
 - Workflow name: `CI`
 - Job name: `checks`
 - Triggers:
-  - `pull_request` (required check target)
+  - `pull_request` to `main` (required check target)
   - `push` to `main` (recommended)
+
+Canonical required check name in GitHub UI:
+- `CI / checks`
 
 This workflow runs repository quality checks only. It does not deploy and does not use secrets.
 

@@ -1,0 +1,152 @@
+name: Deploy OAuth Callback Staging (Cloud Run)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-oauth-callback-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: ai-email-project-488406
+  GCP_REGION: us-east1
+  CLOUD_RUN_SERVICE: ai-email-oauth-callback-staging
+  API_CLOUD_RUN_SERVICE: ai-email-api-staging
+  ARTIFACT_REPO: ai-email-staging
+  IMAGE_NAME: oauth-callback
+  OAUTH_CALLBACK_RUNTIME_SA: cloudrun-oauth-callback-staging-runtime@ai-email-project-488406.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          gcloud artifacts repositories describe "${ARTIFACT_REPO}" \
+            --location "${GCP_REGION}" >/dev/null 2>&1 || \
+          gcloud artifacts repositories create "${ARTIFACT_REPO}" \
+            --repository-format docker \
+            --location "${GCP_REGION}" \
+            --description "Staging images for AI Email Project"
+
+      - name: Configure docker auth for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/${IMAGE_NAME}:${GITHUB_SHA}"
+          echo "Submitting Cloud Build..."
+          BUILD_ID="$(gcloud builds submit . \
+            --config apps/oauth-callback/cloudbuild.yaml \
+            --substitutions=_IMAGE_URI="${IMAGE_URI}" \
+            --async \
+            --quiet \
+            --format='value(id)')"
+          if [[ -z "${BUILD_ID}" ]]; then
+            echo "ERROR: BUILD_ID empty. gcloud builds submit did not return an id."
+            exit 1
+          fi
+
+          echo "BUILD_ID=${BUILD_ID}" >> "$GITHUB_ENV"
+          echo "build_id=${BUILD_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Cloud Build
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BUILD_ID:-}" ]; then
+            echo "BUILD_ID is not set."
+            exit 1
+          fi
+
+          deadline=$((SECONDS + 1200))
+          while true; do
+            STATUS="$(gcloud builds describe "${BUILD_ID}" --format='value(status)')"
+            echo "Cloud Build ${BUILD_ID} status: ${STATUS}"
+
+            case "${STATUS}" in
+              SUCCESS)
+                break
+                ;;
+              FAILURE|CANCELLED|TIMEOUT)
+                echo "Cloud Build ended with status: ${STATUS}"
+                exit 1
+                ;;
+            esac
+
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "Timed out waiting for Cloud Build ${BUILD_ID} after 20 minutes."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      - name: Deploy to Cloud Run (public callback bridge)
+        env:
+          IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --image "${IMAGE_URI}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --service-account "${OAUTH_CALLBACK_RUNTIME_SA}" \
+            --allow-unauthenticated \
+            --ingress all \
+            --port 8080 \
+            --cpu 1 \
+            --cpu-throttling \
+            --memory 256Mi \
+            --concurrency 1 \
+            --timeout 300 \
+            --min-instances 0 \
+            --max-instances 1 \
+            --set-env-vars "NODE_ENV=production,HOST=0.0.0.0" \
+            --update-secrets "API_BASE_URL=API_PUBLIC_URL:latest,ADMIN_BASE_URL=ADMIN_PUBLIC_URL:latest"
+
+      - name: Ensure bridge runtime SA can invoke private API
+        run: |
+          gcloud run services add-iam-policy-binding "${API_CLOUD_RUN_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --member "serviceAccount:${OAUTH_CALLBACK_RUNTIME_SA}" \
+            --role "roles/run.invoker"
+
+      - name: Resolve service URL
+        id: service_url
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --region "${GCP_REGION}" --format='value(status.url)')"
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify callback endpoint redirects on missing params
+        env:
+          SERVICE_URL: ${{ steps.service_url.outputs.service_url }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' "${SERVICE_URL}/v1/auth/gmail/callback")"
+          if [ "${STATUS}" != "302" ]; then
+            echo "Expected 302 redirect for missing params, got ${STATUS}"
+            exit 1
+          fi
+          echo "Callback redirect check passed (${STATUS})"

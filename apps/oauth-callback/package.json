@@ -1,0 +1,19 @@
+{
+  "name": "@ai-email/oauth-callback",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "./node_modules/.bin/tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^4.26.2",
+    "google-auth-library": "^9.15.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

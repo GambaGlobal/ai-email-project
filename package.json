@@ -2,6 +2,11 @@
   "name": "ai-email-project",
   "private": true,
   "packageManager": "pnpm@10.29.2",
+  "pnpm": {
+    "overrides": {
+      "ioredis": "5.9.2"
+    }
+  },
   "scripts": {
     "preflight": "node ./scripts/preflight.mjs",
     "typecheck": "node ./scripts/typecheck.mjs",
