@@ -1,14 +1,6 @@
 import Fastify from "fastify";
 import { GoogleAuth } from "google-auth-library";
 
-function requiredEnv(name: "API_BASE_URL" | "ADMIN_BASE_URL"): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
-
 function buildAdminRedirect(adminBaseUrl: string, status: "connected" | "error"): string {
   const redirect = new URL("/onboarding", adminBaseUrl);
   redirect.searchParams.set("gmail", status);
@@ -42,9 +34,58 @@ function appendQueryParams(
   }
 }
 
+function readConfiguredEnv(
+  preferredName: "API_PUBLIC_URL" | "ADMIN_PUBLIC_URL",
+  aliasName: "API_BASE_URL" | "ADMIN_BASE_URL"
+): string | null {
+  const preferred = process.env[preferredName]?.trim();
+  if (preferred) {
+    return preferred;
+  }
+
+  const alias = process.env[aliasName]?.trim();
+  return alias || null;
+}
+
+function normalizeBaseUrl(rawUrl: string): string | null {
+  const withScheme = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+async function parseOAuthStartUrl(response: Response): Promise<string | null> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return null;
+  }
+
+  try {
+    const payload = (await response.json()) as { url?: unknown; authUrl?: unknown };
+    const candidate =
+      typeof payload.url === "string"
+        ? payload.url
+        : typeof payload.authUrl === "string"
+          ? payload.authUrl
+          : null;
+    if (!candidate) {
+      return null;
+    }
+
+    const parsed = new URL(candidate);
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
-  const apiBaseUrl = requiredEnv("API_BASE_URL");
-  const adminBaseUrl = requiredEnv("ADMIN_BASE_URL");
   const auth = new GoogleAuth();
 
   const app = Fastify({
@@ -56,6 +97,27 @@ async function main() {
   app.get<{ Querystring: { code?: string | string[]; state?: string | string[]; error?: string | string[] } }>(
     "/v1/auth/gmail/callback",
     async (request, reply) => {
+      const rawAdminBaseUrl = readConfiguredEnv("ADMIN_PUBLIC_URL", "ADMIN_BASE_URL");
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const adminBaseUrl = rawAdminBaseUrl ? normalizeBaseUrl(rawAdminBaseUrl) : null;
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+
+      if (!adminBaseUrl || !apiBaseUrl) {
+        request.log.error(
+          {
+            adminConfigured: Boolean(rawAdminBaseUrl),
+            apiConfigured: Boolean(rawApiBaseUrl),
+            adminUrlValid: Boolean(adminBaseUrl),
+            apiUrlValid: Boolean(apiBaseUrl)
+          },
+          "gmail oauth callback bridge: missing or invalid bridge base URLs"
+        );
+        if (!adminBaseUrl) {
+          return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+        }
+        return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
+      }
+
       const code = asSingle(request.query.code);
       const state = asSingle(request.query.state);
       const oauthError = asSingle(request.query.error);
@@ -100,6 +162,27 @@ async function main() {
   app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
     "/v1/auth/gmail/start",
     async (request, reply) => {
+      const rawAdminBaseUrl = readConfiguredEnv("ADMIN_PUBLIC_URL", "ADMIN_BASE_URL");
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const adminBaseUrl = rawAdminBaseUrl ? normalizeBaseUrl(rawAdminBaseUrl) : null;
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+
+      if (!adminBaseUrl || !apiBaseUrl) {
+        request.log.error(
+          {
+            adminConfigured: Boolean(rawAdminBaseUrl),
+            apiConfigured: Boolean(rawApiBaseUrl),
+            adminUrlValid: Boolean(adminBaseUrl),
+            apiUrlValid: Boolean(apiBaseUrl)
+          },
+          "gmail oauth start bridge: missing or invalid bridge base URLs"
+        );
+        if (!adminBaseUrl) {
+          return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+        }
+        return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
+      }
+
       try {
         const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
         const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
@@ -121,9 +204,20 @@ async function main() {
           return reply.redirect(302, location);
         }
 
+        if (response.ok) {
+          const authUrl = await parseOAuthStartUrl(response);
+          if (authUrl) {
+            request.log.info("gmail oauth start bridge: private start JSON url forwarded");
+            return reply.redirect(302, authUrl);
+          }
+        }
+
         request.log.warn(
-          { statusCode: response.status },
-          "gmail oauth start bridge: unexpected private start response"
+          {
+            statusCode: response.status,
+            hasLocationHeader: Boolean(location)
+          },
+          "gmail oauth start bridge: upstream response did not include redirectable auth URL"
         );
         return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
       } catch (error) {
