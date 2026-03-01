@@ -15,7 +15,8 @@ const DRAFTS_ENABLED_STORAGE_KEY = "operator_drafts_enabled_v1";
 // NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_TENANT_ID.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 const OAUTH_BRIDGE_URL = process.env.NEXT_PUBLIC_OAUTH_BRIDGE_URL;
-const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
+const CONFIGURED_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID?.trim() || null;
+const API_TENANT_ID = CONFIGURED_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
 const UPLOAD_DOCS_STEP_INDEX = 2;
@@ -184,7 +185,7 @@ export default function OnboardingPage() {
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
   const hasRealOAuthStartUrl = Boolean(OAUTH_BRIDGE_URL ?? API_BASE_URL);
-  const hasTenantIdForRealApi = Boolean(API_TENANT_ID);
+  const hasTenantIdForRealApi = Boolean(CONFIGURED_TENANT_ID);
   const connectTimeoutRef = useRef<number | null>(null);
   const testTimeoutRef = useRef<number | null>(null);
 
@@ -351,7 +352,7 @@ export default function OnboardingPage() {
     }, 900);
   };
 
-  const refreshRealConnectionStatus = async () => {
+  const refreshRealConnectionStatus = async (options?: { preserveStateOnError?: boolean }) => {
     if (!API_BASE_URL || !API_TENANT_ID) {
       return;
     }
@@ -393,7 +394,9 @@ export default function OnboardingPage() {
         setLastVerifiedAt(null);
       }
     } catch (error) {
-      setGmailConnectionState("error");
+      if (!options?.preserveStateOnError) {
+        setGmailConnectionState("error");
+      }
       setShowErrorDetails(true);
       // eslint-disable-next-line no-console
       console.error(error);
@@ -437,6 +440,8 @@ export default function OnboardingPage() {
     if (connected === "gmail") {
       setGmailConnectionState("connected");
       stripConnectedParam();
+      void refreshRealConnectionStatus({ preserveStateOnError: true });
+      return;
     }
 
     void refreshRealConnectionStatus();
@@ -469,13 +474,18 @@ export default function OnboardingPage() {
           </p>
           <div className="onboarding-actions">
             {hasRealOAuthStartUrl ? (
-              <button
-                type="button"
-                onClick={refreshRealConnectionStatus}
-                disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
-              >
-                {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={refreshRealConnectionStatus}
+                  disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
+                >
+                  {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
+                </button>
+                <button type="button" onClick={disconnectGmail}>
+                  Disconnect
+                </button>
+              </>
             ) : (
               <>
                 <button type="button" onClick={testConnection} disabled={isTestingConnection}>
@@ -722,6 +732,12 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
         {hasRealOAuthStartUrl && !hasTenantIdForRealApi ? (
           <p className="onboarding-note">
             Set NEXT_PUBLIC_TENANT_ID to enable real connection status checks.
+          </p>
+        ) : null}
+        {!hasRealOAuthStartUrl ? (
+          <p className="onboarding-note">
+            Real OAuth redirect is disabled. Set NEXT_PUBLIC_OAUTH_BRIDGE_URL (or
+            NEXT_PUBLIC_API_BASE_URL) to connect against staging/local API.
           </p>
         ) : null}
         <p className="onboarding-note">

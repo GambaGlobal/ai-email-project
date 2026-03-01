@@ -1,9 +1,9 @@
 import Fastify from "fastify";
 import { GoogleAuth } from "google-auth-library";
 
-function buildAdminRedirect(adminBaseUrl: string, status: "connected" | "error"): string {
+function buildAdminRedirect(adminBaseUrl: string, status: "gmail" | "error"): string {
   const redirect = new URL("/onboarding", adminBaseUrl);
-  redirect.searchParams.set("gmail", status);
+  redirect.searchParams.set("connected", status);
   return redirect.toString();
 }
 
@@ -144,7 +144,7 @@ async function main() {
 
         if (response.ok) {
           request.log.info("gmail oauth callback bridge: private callback succeeded");
-          return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "connected"));
+          return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "gmail"));
         }
 
         request.log.warn(
