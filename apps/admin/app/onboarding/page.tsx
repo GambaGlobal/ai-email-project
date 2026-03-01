@@ -420,11 +420,23 @@ export default function OnboardingPage() {
     }
 
     const query = new URLSearchParams(window.location.search);
-    const gmailResult = query.get("gmail");
+    const connected = query.get("connected");
+    const stripConnectedParam = () => {
+      query.delete("connected");
+      const nextQuery = query.toString();
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    };
 
-    if (gmailResult === "error") {
+    if (connected === "error") {
       setGmailConnectionState("error");
+      stripConnectedParam();
       return;
+    }
+
+    if (connected === "gmail") {
+      setGmailConnectionState("connected");
+      stripConnectedParam();
     }
 
     void refreshRealConnectionStatus();
