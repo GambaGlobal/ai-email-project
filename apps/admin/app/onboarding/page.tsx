@@ -505,7 +505,9 @@ export default function OnboardingPage() {
               <>
                 <button
                   type="button"
-                  onClick={refreshRealConnectionStatus}
+                  onClick={() => {
+                    void refreshRealConnectionStatus();
+                  }}
                   disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
                 >
                   {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
@@ -547,7 +549,9 @@ export default function OnboardingPage() {
               </button>
               <button
                 type="button"
-                onClick={refreshRealConnectionStatus}
+                onClick={() => {
+                  void refreshRealConnectionStatus();
+                }}
                 disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
               >
                 {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
@@ -611,7 +615,9 @@ Detail: Token refresh rejected in OAuth callback simulation.`}
             </button>
             <button
               type="button"
-              onClick={refreshRealConnectionStatus}
+              onClick={() => {
+                void refreshRealConnectionStatus();
+              }}
               disabled={isRefreshingRealStatus || !hasTenantIdForRealApi}
             >
               {isRefreshingRealStatus ? "Refreshing..." : "Refresh status"}
