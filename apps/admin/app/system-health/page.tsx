@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_DEV_TENANT_ID } from "../lib/dev-config";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+const OAUTH_BRIDGE_URL = process.env.NEXT_PUBLIC_OAUTH_BRIDGE_URL;
+const PROXY_BASE_URL = OAUTH_BRIDGE_URL ?? API_BASE_URL;
 const API_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
 
 const GMAIL_CONNECTION_STATE_KEY = "gmail_connection_state";
@@ -269,7 +271,7 @@ export default function SystemHealthPage() {
   const [docs, setDocs] = useState<DocRecord[]>([]);
   const [draftsEnabled, setDraftsEnabled] = useState(false);
 
-  const realMode = Boolean(API_BASE_URL && API_TENANT_ID);
+  const realMode = Boolean(PROXY_BASE_URL && API_TENANT_ID);
 
   const loadHealth = useCallback(async () => {
     setIsLoading(true);
@@ -299,8 +301,8 @@ export default function SystemHealthPage() {
 
       const headers = { "x-tenant-id": API_TENANT_ID as string };
       const [gmailResponse, docsResponse] = await Promise.all([
-        fetch(new URL("/v1/mail/gmail/connection", API_BASE_URL).toString(), { headers }),
-        fetch(new URL("/v1/docs", API_BASE_URL).toString(), { headers })
+        fetch(new URL("/v1/mail/gmail/connection", PROXY_BASE_URL).toString(), { headers }),
+        fetch(new URL("/v1/docs", PROXY_BASE_URL).toString(), { headers })
       ]);
 
       if (!gmailResponse.ok) {
@@ -386,8 +388,8 @@ export default function SystemHealthPage() {
 
       {!realMode && (
         <div className="health-banner" role="status">
-          System Health is in offline/demo mode. Set NEXT_PUBLIC_API_BASE_URL and
-          NEXT_PUBLIC_TENANT_ID to enable real health checks.
+          System Health is in offline/demo mode. Set NEXT_PUBLIC_OAUTH_BRIDGE_URL (or
+          NEXT_PUBLIC_API_BASE_URL) and NEXT_PUBLIC_TENANT_ID to enable real health checks.
         </div>
       )}
 

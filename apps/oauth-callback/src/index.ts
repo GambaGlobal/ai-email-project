@@ -3,7 +3,8 @@ import { GoogleAuth } from "google-auth-library";
 
 const GMAIL_PROXY_PATHS = new Set([
   "/v1/mail/gmail/connection",
-  "/v1/mail/gmail/disconnect"
+  "/v1/mail/gmail/disconnect",
+  "/v1/docs"
 ]);
 const GMAIL_PROXY_ALLOWED_METHODS = "GET, POST, OPTIONS";
 const GMAIL_PROXY_ALLOWED_HEADERS = "x-tenant-id, content-type";
@@ -419,6 +420,59 @@ async function main() {
         return reply.code(response.status).send(payload);
       } catch (error) {
         request.log.error({ error }, "gmail disconnect proxy: forwarding failed");
+        return reply.code(502).send({ error: "Unable to reach private API" });
+      }
+    }
+  );
+
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    "/v1/docs",
+    async (request, reply) => {
+      const originHeader = request.headers.origin;
+      const origin = typeof originHeader === "string" ? originHeader : null;
+      if (origin && !applyCorsForGmailProxy(reply, origin, allowedOrigins)) {
+        return reply.code(403).send({ error: "Origin not allowed" });
+      }
+
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+      const tenantId = readTenantIdHeader(request.headers);
+
+      if (!tenantId) {
+        return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
+      }
+
+      if (!apiBaseUrl) {
+        request.log.error(
+          { apiConfigured: Boolean(rawApiBaseUrl), apiUrlValid: Boolean(apiBaseUrl) },
+          "docs proxy: missing or invalid API base URL"
+        );
+        return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+      }
+
+      try {
+        const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
+        const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
+
+        const privateUrl = new URL("/v1/docs", apiBaseUrl);
+        appendQueryParams(privateUrl, request.query);
+
+        const response = await fetch(privateUrl.toString(), {
+          method: "GET",
+          headers: {
+            Authorization: String(tokenHeaders.Authorization ?? ""),
+            "x-tenant-id": tenantId
+          }
+        });
+
+        const contentType = response.headers.get("content-type");
+        const payload = await response.text();
+        if (contentType) {
+          reply.header("content-type", contentType);
+        }
+        return reply.code(response.status).send(payload);
+      } catch (error) {
+        request.log.error({ error }, "docs proxy: forwarding failed");
         return reply.code(502).send({ error: "Unable to reach private API" });
       }
     }
