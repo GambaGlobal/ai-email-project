@@ -1,9 +1,9 @@
 import Fastify from "fastify";
 import { GoogleAuth } from "google-auth-library";
 
-function buildAdminRedirect(adminBaseUrl: string, status: "connected" | "error"): string {
+function buildAdminRedirect(adminBaseUrl: string, status: "gmail" | "error"): string {
   const redirect = new URL("/onboarding", adminBaseUrl);
-  redirect.searchParams.set("gmail", status);
+  redirect.searchParams.set("connected", status);
   return redirect.toString();
 }
 
@@ -45,6 +45,21 @@ function readConfiguredEnv(
 
   const alias = process.env[aliasName]?.trim();
   return alias || null;
+}
+
+function readTenantIdHeader(headers: Record<string, string | string[] | undefined>): string | null {
+  const raw = headers["x-tenant-id"];
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
+  }
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+  return null;
 }
 
 function normalizeBaseUrl(rawUrl: string): string | null {
@@ -144,7 +159,7 @@ async function main() {
 
         if (response.ok) {
           request.log.info("gmail oauth callback bridge: private callback succeeded");
-          return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "connected"));
+          return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "gmail"));
         }
 
         request.log.warn(
@@ -223,6 +238,100 @@ async function main() {
       } catch (error) {
         request.log.error({ error }, "gmail oauth start bridge: forwarding failed");
         return reply.redirect(302, buildAdminRedirect(adminBaseUrl, "error"));
+      }
+    }
+  );
+
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    "/v1/mail/gmail/connection",
+    async (request, reply) => {
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+      const tenantId = readTenantIdHeader(request.headers);
+
+      if (!tenantId) {
+        return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
+      }
+
+      if (!apiBaseUrl) {
+        request.log.error(
+          { apiConfigured: Boolean(rawApiBaseUrl), apiUrlValid: Boolean(apiBaseUrl) },
+          "gmail connection proxy: missing or invalid API base URL"
+        );
+        return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+      }
+
+      try {
+        const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
+        const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
+
+        const privateUrl = new URL("/v1/mail/gmail/connection", apiBaseUrl);
+        appendQueryParams(privateUrl, request.query);
+
+        const response = await fetch(privateUrl.toString(), {
+          method: "GET",
+          headers: {
+            Authorization: String(tokenHeaders.Authorization ?? ""),
+            "x-tenant-id": tenantId
+          }
+        });
+
+        const contentType = response.headers.get("content-type");
+        const payload = await response.text();
+        if (contentType) {
+          reply.header("content-type", contentType);
+        }
+        return reply.code(response.status).send(payload);
+      } catch (error) {
+        request.log.error({ error }, "gmail connection proxy: forwarding failed");
+        return reply.code(502).send({ error: "Unable to reach private API" });
+      }
+    }
+  );
+
+  app.post<{ Querystring: Record<string, string | string[] | undefined> }>(
+    "/v1/mail/gmail/disconnect",
+    async (request, reply) => {
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+      const tenantId = readTenantIdHeader(request.headers);
+
+      if (!tenantId) {
+        return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
+      }
+
+      if (!apiBaseUrl) {
+        request.log.error(
+          { apiConfigured: Boolean(rawApiBaseUrl), apiUrlValid: Boolean(apiBaseUrl) },
+          "gmail disconnect proxy: missing or invalid API base URL"
+        );
+        return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+      }
+
+      try {
+        const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
+        const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
+
+        const privateUrl = new URL("/v1/mail/gmail/disconnect", apiBaseUrl);
+        appendQueryParams(privateUrl, request.query);
+
+        const response = await fetch(privateUrl.toString(), {
+          method: "POST",
+          headers: {
+            Authorization: String(tokenHeaders.Authorization ?? ""),
+            "x-tenant-id": tenantId
+          }
+        });
+
+        const contentType = response.headers.get("content-type");
+        const payload = await response.text();
+        if (contentType) {
+          reply.header("content-type", contentType);
+        }
+        return reply.code(response.status).send(payload);
+      } catch (error) {
+        request.log.error({ error }, "gmail disconnect proxy: forwarding failed");
+        return reply.code(502).send({ error: "Unable to reach private API" });
       }
     }
   );

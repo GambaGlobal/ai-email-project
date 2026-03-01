@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { queryOne, withTenantClient } from "../lib/db.js";
-import { getGmailConnection } from "../lib/gmail-connection-store.js";
+import { disconnectGmailConnection, getGmailConnection } from "../lib/gmail-connection-store.js";
 import { resolveTenantIdFromHeader, resolveTenantIdFromQuery } from "../lib/tenant.js";
 
 type ConnectionStatus = "connected" | "disconnected" | "reconnect_required";
@@ -98,6 +98,51 @@ const gmailConnectionRoutes: FastifyPluginAsync = async (app) => {
       } catch (error) {
         request.log.error({ error }, "Failed to load Gmail connection status");
         return reply.code(500).send({ error: "Unable to fetch Gmail connection status" });
+      }
+    }
+  );
+
+  app.post<{ Querystring: { tenant_id?: string } }>(
+    "/v1/mail/gmail/disconnect",
+    async (request, reply) => {
+      let tenantId = resolveTenantIdFromHeader(request);
+
+      if (!tenantId && process.env.ALLOW_TENANT_QUERY_FALLBACK === "true") {
+        tenantId = resolveTenantIdFromQuery(request);
+      }
+
+      if (!tenantId) {
+        return reply.code(400).send({
+          error:
+            "Missing tenant context. Send x-tenant-id header (or enable ALLOW_TENANT_QUERY_FALLBACK=true)."
+        });
+      }
+
+      try {
+        await withTenantClient(tenantId, async (client) => {
+          await disconnectGmailConnection(client, tenantId);
+
+          await client.query(
+            `
+              UPDATE mailboxes
+              SET
+                status = 'disconnected',
+                updated_at = now()
+              WHERE tenant_id = $1
+                AND provider = 'gmail'
+            `,
+            [tenantId]
+          );
+        });
+
+        return reply.send({
+          provider: "gmail",
+          status: "disconnected",
+          updated_at: new Date().toISOString()
+        });
+      } catch (error) {
+        request.log.error({ error }, "Failed to disconnect Gmail");
+        return reply.code(500).send({ error: "Unable to disconnect Gmail" });
       }
     }
   );

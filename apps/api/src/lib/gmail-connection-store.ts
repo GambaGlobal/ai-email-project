@@ -129,3 +129,36 @@ export async function getGmailConnection(
     [tenantId]
   )) as GmailConnectionRow | null;
 }
+
+export async function disconnectGmailConnection(
+  client: PoolClient,
+  tenantId: string
+): Promise<GmailConnectionRow | null> {
+  return (await queryOne(
+    client,
+    `
+      UPDATE mail_provider_connections
+      SET
+        status = 'disconnected',
+        access_token_ciphertext = NULL,
+        access_token_iv = NULL,
+        access_token_tag = NULL,
+        refresh_token_ciphertext = NULL,
+        refresh_token_iv = NULL,
+        refresh_token_tag = NULL,
+        token_expires_at = NULL,
+        last_verified_at = NULL,
+        updated_at = now()
+      WHERE tenant_id = $1
+        AND provider = 'gmail'
+      RETURNING
+        tenant_id::text AS tenant_id,
+        provider,
+        status,
+        connected_at,
+        last_verified_at,
+        updated_at
+    `,
+    [tenantId]
+  )) as GmailConnectionRow | null;
+}

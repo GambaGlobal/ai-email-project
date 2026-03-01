@@ -78,6 +78,7 @@ Result summary:
   - `apps/admin/app/onboarding/page.tsx`
 - Likely purpose:
   - Public OAuth bridge base URL for Gmail connect start flow (`/v1/auth/gmail/start`) while API stays private.
+  - Proxies Gmail status/disconnect calls from onboarding (`/v1/mail/gmail/connection`, `/v1/mail/gmail/disconnect`) to private API.
 - Build/runtime requirement (best effort):
   - Optional but recommended for staging/private API setup.
   - If not set, onboarding connect flow falls back to `NEXT_PUBLIC_API_BASE_URL`.
