@@ -1,6 +1,13 @@
 import Fastify from "fastify";
 import { GoogleAuth } from "google-auth-library";
 
+const GMAIL_PROXY_PATHS = new Set([
+  "/v1/mail/gmail/connection",
+  "/v1/mail/gmail/disconnect"
+]);
+const GMAIL_PROXY_ALLOWED_METHODS = "GET, POST, OPTIONS";
+const GMAIL_PROXY_ALLOWED_HEADERS = "x-tenant-id, content-type";
+
 function buildAdminRedirect(adminBaseUrl: string, status: "gmail" | "error"): string {
   const redirect = new URL("/onboarding", adminBaseUrl);
   redirect.searchParams.set("connected", status);
@@ -75,6 +82,48 @@ function normalizeBaseUrl(rawUrl: string): string | null {
   }
 }
 
+function toOrigin(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildAllowedOrigins(): Set<string> {
+  const allowed = new Set<string>([
+    "https://ai-email-admin-staging.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:3001"
+  ]);
+
+  const adminPublicOrigin = toOrigin(readConfiguredEnv("ADMIN_PUBLIC_URL", "ADMIN_BASE_URL"));
+  if (adminPublicOrigin) {
+    allowed.add(adminPublicOrigin);
+  }
+
+  return allowed;
+}
+
+function applyCorsForGmailProxy(
+  reply: { header: (name: string, value: string) => unknown },
+  origin: string,
+  allowedOrigins: Set<string>
+): boolean {
+  if (!allowedOrigins.has(origin)) {
+    return false;
+  }
+
+  reply.header("vary", "Origin");
+  reply.header("access-control-allow-origin", origin);
+  reply.header("access-control-allow-methods", GMAIL_PROXY_ALLOWED_METHODS);
+  reply.header("access-control-allow-headers", GMAIL_PROXY_ALLOWED_HEADERS);
+  return true;
+}
+
 async function parseOAuthStartUrl(response: Response): Promise<string | null> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
@@ -102,10 +151,27 @@ async function parseOAuthStartUrl(response: Response): Promise<string | null> {
 
 async function main() {
   const auth = new GoogleAuth();
+  const allowedOrigins = buildAllowedOrigins();
 
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? "info"
+    }
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (!GMAIL_PROXY_PATHS.has(request.routerPath ?? request.url.split("?")[0])) {
+      return;
+    }
+
+    const originHeader = request.headers.origin;
+    const origin = typeof originHeader === "string" ? originHeader : null;
+    if (origin) {
+      applyCorsForGmailProxy(reply, origin, allowedOrigins);
+    }
+
+    if (request.method === "OPTIONS") {
+      return reply.code(204).send();
     }
   });
 
@@ -245,6 +311,12 @@ async function main() {
   app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
     "/v1/mail/gmail/connection",
     async (request, reply) => {
+      const originHeader = request.headers.origin;
+      const origin = typeof originHeader === "string" ? originHeader : null;
+      if (origin && !applyCorsForGmailProxy(reply, origin, allowedOrigins)) {
+        return reply.code(403).send({ error: "Origin not allowed" });
+      }
+
       const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
       const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
       const tenantId = readTenantIdHeader(request.headers);
@@ -252,6 +324,11 @@ async function main() {
       if (!tenantId) {
         return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
       }
+
+      request.log.info(
+        { origin: origin ?? null, tenantHeaderPresent: true },
+        "gmail connection proxy request"
+      );
 
       if (!apiBaseUrl) {
         request.log.error(
@@ -292,6 +369,12 @@ async function main() {
   app.post<{ Querystring: Record<string, string | string[] | undefined> }>(
     "/v1/mail/gmail/disconnect",
     async (request, reply) => {
+      const originHeader = request.headers.origin;
+      const origin = typeof originHeader === "string" ? originHeader : null;
+      if (origin && !applyCorsForGmailProxy(reply, origin, allowedOrigins)) {
+        return reply.code(403).send({ error: "Origin not allowed" });
+      }
+
       const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
       const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
       const tenantId = readTenantIdHeader(request.headers);
@@ -299,6 +382,11 @@ async function main() {
       if (!tenantId) {
         return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
       }
+
+      request.log.info(
+        { origin: origin ?? null, tenantHeaderPresent: true },
+        "gmail disconnect proxy request"
+      );
 
       if (!apiBaseUrl) {
         request.log.error(
