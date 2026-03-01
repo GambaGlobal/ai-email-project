@@ -17,6 +17,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 const OAUTH_BRIDGE_URL = process.env.NEXT_PUBLIC_OAUTH_BRIDGE_URL;
 const CONFIGURED_TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID?.trim() || null;
 const API_TENANT_ID = CONFIGURED_TENANT_ID ?? DEFAULT_DEV_TENANT_ID;
+const GMAIL_PROXY_BASE_URL = OAUTH_BRIDGE_URL ?? API_BASE_URL;
 
 const CONNECT_GMAIL_STEP_INDEX = 1;
 const UPLOAD_DOCS_STEP_INDEX = 2;
@@ -185,6 +186,7 @@ export default function OnboardingPage() {
   const step = steps[currentStep];
   const isFinalStep = currentStep === steps.length - 1;
   const hasRealOAuthStartUrl = Boolean(OAUTH_BRIDGE_URL ?? API_BASE_URL);
+  const hasRealGmailProxyUrl = Boolean(GMAIL_PROXY_BASE_URL);
   const hasTenantIdForRealApi = Boolean(CONFIGURED_TENANT_ID);
   const connectTimeoutRef = useRef<number | null>(null);
   const testTimeoutRef = useRef<number | null>(null);
@@ -301,7 +303,7 @@ export default function OnboardingPage() {
     }, 1000);
   };
 
-  const disconnectGmail = () => {
+  const disconnectGmail = async () => {
     if (connectTimeoutRef.current !== null) {
       window.clearTimeout(connectTimeoutRef.current);
     }
@@ -312,8 +314,34 @@ export default function OnboardingPage() {
 
     setIsTestingConnection(false);
     setShowErrorDetails(false);
-    setGmailConnectionState("disconnected");
-    setLastVerifiedAt(null);
+
+    if (!hasRealGmailProxyUrl || !API_TENANT_ID) {
+      setGmailConnectionState("disconnected");
+      setLastVerifiedAt(null);
+      return;
+    }
+
+    try {
+      const disconnectUrl = new URL("/v1/mail/gmail/disconnect", GMAIL_PROXY_BASE_URL);
+      const response = await fetch(disconnectUrl.toString(), {
+        method: "POST",
+        headers: {
+          "x-tenant-id": API_TENANT_ID
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Disconnect request failed with ${response.status}`);
+      }
+
+      setGmailConnectionState("disconnected");
+      setLastVerifiedAt(null);
+    } catch (error) {
+      setGmailConnectionState("error");
+      setShowErrorDetails(true);
+      // eslint-disable-next-line no-console
+      console.error(error);
+    }
   };
 
   const setMockConnectionState = (state: GmailConnectionState) => {
@@ -353,7 +381,7 @@ export default function OnboardingPage() {
   };
 
   const refreshRealConnectionStatus = async (options?: { preserveStateOnError?: boolean }) => {
-    if (!API_BASE_URL || !API_TENANT_ID) {
+    if (!GMAIL_PROXY_BASE_URL || !API_TENANT_ID) {
       return;
     }
 
@@ -361,7 +389,7 @@ export default function OnboardingPage() {
     setShowErrorDetails(false);
 
     try {
-      const statusUrl = new URL("/v1/mail/gmail/connection", API_BASE_URL);
+      const statusUrl = new URL("/v1/mail/gmail/connection", GMAIL_PROXY_BASE_URL);
 
       const response = await fetch(statusUrl.toString(), {
         method: "GET",
@@ -473,7 +501,7 @@ export default function OnboardingPage() {
             <strong>Last verified:</strong> {lastVerifiedLabel}
           </p>
           <div className="onboarding-actions">
-            {hasRealOAuthStartUrl ? (
+            {hasRealGmailProxyUrl ? (
               <>
                 <button
                   type="button"
