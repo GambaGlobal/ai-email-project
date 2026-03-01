@@ -62,6 +62,21 @@ function readTenantIdHeader(headers: Record<string, string | string[] | undefine
   return null;
 }
 
+function readOriginHeader(headers: Record<string, string | string[] | undefined>): string | null {
+  const raw = headers.origin;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
+  }
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+  return null;
+}
+
 function normalizeBaseUrl(rawUrl: string): string | null {
   const withScheme = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
   try {
@@ -73,6 +88,32 @@ function normalizeBaseUrl(rawUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveAllowedOrigin(headers: Record<string, string | string[] | undefined>): string | null {
+  const origin = readOriginHeader(headers);
+  if (!origin) {
+    return null;
+  }
+
+  const rawAdminBaseUrl = readConfiguredEnv("ADMIN_PUBLIC_URL", "ADMIN_BASE_URL");
+  if (!rawAdminBaseUrl) {
+    return null;
+  }
+
+  const adminOrigin = normalizeBaseUrl(rawAdminBaseUrl);
+  if (!adminOrigin) {
+    return null;
+  }
+
+  return origin === adminOrigin ? origin : null;
+}
+
+function applyCorsHeaders(reply: { header: (name: string, value: string) => unknown }, origin: string): void {
+  reply.header("Vary", "Origin");
+  reply.header("Access-Control-Allow-Origin", origin);
+  reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  reply.header("Access-Control-Allow-Headers", "x-tenant-id, content-type");
 }
 
 async function parseOAuthStartUrl(response: Response): Promise<string | null> {
@@ -245,6 +286,11 @@ async function main() {
   app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
     "/v1/mail/gmail/connection",
     async (request, reply) => {
+      const allowedOrigin = resolveAllowedOrigin(request.headers);
+      if (allowedOrigin) {
+        applyCorsHeaders(reply, allowedOrigin);
+      }
+
       const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
       const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
       const tenantId = readTenantIdHeader(request.headers);
@@ -292,6 +338,11 @@ async function main() {
   app.post<{ Querystring: Record<string, string | string[] | undefined> }>(
     "/v1/mail/gmail/disconnect",
     async (request, reply) => {
+      const allowedOrigin = resolveAllowedOrigin(request.headers);
+      if (allowedOrigin) {
+        applyCorsHeaders(reply, allowedOrigin);
+      }
+
       const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
       const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
       const tenantId = readTenantIdHeader(request.headers);
@@ -335,6 +386,82 @@ async function main() {
       }
     }
   );
+
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    "/v1/docs",
+    async (request, reply) => {
+      const allowedOrigin = resolveAllowedOrigin(request.headers);
+      if (allowedOrigin) {
+        applyCorsHeaders(reply, allowedOrigin);
+      }
+
+      const rawApiBaseUrl = readConfiguredEnv("API_PUBLIC_URL", "API_BASE_URL");
+      const apiBaseUrl = rawApiBaseUrl ? normalizeBaseUrl(rawApiBaseUrl) : null;
+      const tenantId = readTenantIdHeader(request.headers);
+
+      if (!tenantId) {
+        return reply.code(400).send({ error: "Missing tenant context. Send x-tenant-id header." });
+      }
+
+      if (!apiBaseUrl) {
+        request.log.error(
+          { apiConfigured: Boolean(rawApiBaseUrl), apiUrlValid: Boolean(apiBaseUrl) },
+          "docs proxy: missing or invalid API base URL"
+        );
+        return reply.code(500).send({ error: "OAuth bridge misconfigured" });
+      }
+
+      try {
+        const idTokenClient = await auth.getIdTokenClient(apiBaseUrl);
+        const tokenHeaders = await idTokenClient.getRequestHeaders(apiBaseUrl);
+
+        const privateUrl = new URL("/v1/docs", apiBaseUrl);
+        appendQueryParams(privateUrl, request.query);
+
+        const response = await fetch(privateUrl.toString(), {
+          method: "GET",
+          headers: {
+            Authorization: String(tokenHeaders.Authorization ?? ""),
+            "x-tenant-id": tenantId
+          }
+        });
+
+        const contentType = response.headers.get("content-type");
+        const payload = await response.text();
+        if (contentType) {
+          reply.header("content-type", contentType);
+        }
+        return reply.code(response.status).send(payload);
+      } catch (error) {
+        request.log.error({ error }, "docs proxy: forwarding failed");
+        return reply.code(502).send({ error: "Unable to reach private API" });
+      }
+    }
+  );
+
+  app.options("/v1/mail/gmail/connection", async (request, reply) => {
+    const allowedOrigin = resolveAllowedOrigin(request.headers);
+    if (allowedOrigin) {
+      applyCorsHeaders(reply, allowedOrigin);
+    }
+    return reply.code(204).send();
+  });
+
+  app.options("/v1/mail/gmail/disconnect", async (request, reply) => {
+    const allowedOrigin = resolveAllowedOrigin(request.headers);
+    if (allowedOrigin) {
+      applyCorsHeaders(reply, allowedOrigin);
+    }
+    return reply.code(204).send();
+  });
+
+  app.options("/v1/docs", async (request, reply) => {
+    const allowedOrigin = resolveAllowedOrigin(request.headers);
+    if (allowedOrigin) {
+      applyCorsHeaders(reply, allowedOrigin);
+    }
+    return reply.code(204).send();
+  });
 
   const port = Number(process.env.PORT ?? 8080);
   const host = process.env.HOST ?? "0.0.0.0";
